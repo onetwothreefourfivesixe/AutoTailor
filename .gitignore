@@ -1,0 +1,12 @@
+# Personal data: never commit
+*.eml
+config.toml
+.env
+cv/
+data/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/

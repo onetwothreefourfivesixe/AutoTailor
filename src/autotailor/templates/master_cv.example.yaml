@@ -1,0 +1,62 @@
+# Master CV. Put everything here; tailoring selects from it and never adds to it.
+#
+# Rules:
+#   - Every entry and every bullet needs a unique `id` (lowercase, digits, - and _).
+#   - Keep IDs stable once written: past runs refer to them.
+#   - `tags` help matching (skills, domains). Use as many as are true.
+
+contact:
+  name: Your Name
+  email: you@example.com
+  location: City, State
+  links:
+    - https://github.com/yourname
+
+education:
+  - id: edu-example-ms
+    school: Example University
+    degree: M.S.
+    field: Computer Science
+    graduation: "2027-05"
+    details:
+      - id: edu-example-ms-coursework
+        text: "Coursework: Machine Learning, Distributed Systems, Databases."
+        tags: [ml, systems]
+
+experience:
+  - id: exp-acme-intern
+    title: Software Engineering Intern
+    organization: Acme Corp
+    location: Remote
+    start: "2026-06"
+    end: "2026-08"
+    tags: [backend, python]
+    bullets:
+      - id: exp-acme-intern-api
+        text: Built a REST API in Python serving 2k requests per minute, cutting report generation time by 40%.
+        tags: [python, api, performance]
+      - id: exp-acme-intern-tests
+        text: Added integration tests covering the billing pipeline, raising coverage from 55% to 80%.
+        tags: [testing, python]
+
+projects:
+  - id: proj-example
+    title: Example Project
+    start: "2026-01"
+    end: "2026-04"
+    tags: [ml]
+    bullets:
+      - id: proj-example-model
+        text: Trained a text classifier on 50k labeled documents, reaching 91% F1 on a held-out set.
+        tags: [ml, nlp, pytorch]
+
+activities: []
+volunteer: []
+awards: []
+certifications: []
+
+skills:
+  - name: Languages
+    items: [Python, TypeScript, SQL]
+  - name: Tools
+    items: [Git, Docker, PostgreSQL]
