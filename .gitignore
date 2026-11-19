@@ -10,3 +10,7 @@ data/
 __pycache__/
 *.egg-info/
 .pytest_cache/
+
+# Pasted postings (may contain personal page content)
+/posting.txt
+/postings/

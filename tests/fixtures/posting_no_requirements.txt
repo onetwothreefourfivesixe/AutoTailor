@@ -1,0 +1,10 @@
+Lantern Games is hiring a Gameplay Engineering Intern for Summer 2027 in Seattle, WA.
+
+You'll prototype new mechanics in C# and Unity alongside our design team, join
+weekly playtests, and ship at least one feature to our live game.
+
+We're looking for people who love games, write clear code, and give and take
+feedback well. Show us something you've built: a game jam entry, a mod, or a
+personal project.
+
+Pay: $40/hour. Housing stipend provided.

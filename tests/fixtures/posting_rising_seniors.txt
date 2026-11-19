@@ -1,0 +1,17 @@
+About Halcyon Analytics
+Halcyon Analytics helps hospitals forecast staffing needs with machine learning.
+
+Data Science Intern, Summer 2027
+Boston, MA (on-site)
+
+What you'll do
+- Build forecasting models in Python
+- Present results to clinical operations leaders
+
+Qualifications
+- Undergraduate student pursuing a bachelor's degree in Statistics, Data Science, Computer Science, or a related field.
+- Working knowledge of Python and SQL.
+- Experience with time-series forecasting is a plus.
+
+This internship is open to rising seniors graduating in Spring 2028.
+Applicants must be authorized to work in the United States; we do not offer visa sponsorship.

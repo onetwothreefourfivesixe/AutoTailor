@@ -31,6 +31,27 @@ Then:
 | `autotailor config show` | Print all settings. |
 | `autotailor config set <key> <value>` | Change one setting, e.g. `config set run.jobs_per_run 5`. |
 | `autotailor cv validate` | Check the master CV for errors and duplicate IDs. |
+| `autotailor fetch` | Pull postings from the job boards listed in `config.toml`, or one board with `-b greenhouse:figma`. |
+| `autotailor add <url>` | Add one posting by URL. Greenhouse, Lever and Ashby URLs need no model. |
+| `autotailor add --file posting.txt` | Add a posting from copied text (also accepts text piped on stdin). |
+| `autotailor jobs list` / `jobs show <id>` | Browse stored postings; `-v eligible` filters by verdict, `show` gives the reasons. |
+| `autotailor screen` | Check eligibility: titles first, then each posting's requirements against your profile. |
+| `autotailor screen --rejudge` | Recompute verdicts after changing your profile or `[eligibility]` rules; no model calls. |
+
+## Job sources
+
+Company job boards are listed per ATS in `config.toml` by the company's slug, the name in its board URL (`boards.greenhouse.io/<slug>`, `jobs.lever.co/<slug>`, `jobs.ashbyhq.com/<slug>`):
+
+```toml
+[sources]
+title_include = ["intern", "internship", "co-op"]   # keep only matching titles; [] keeps all
+title_exclude = []
+greenhouse = ["figma"]
+lever = ["palantir"]
+ashby = ["openai"]
+```
+
+LinkedIn, Handshake, Runway, Indeed and Glassdoor are never fetched automatically, because their terms forbid it. For those, copy the posting text and use `autotailor add --file`.
 
 ## Models
 
@@ -62,9 +83,16 @@ src/autotailor/
   config.py   settings (profile, eligibility rules, run limits, sources, mail, models)
   models.py   job posting, requirements, match
   cv.py       master CV schema
-  db.py       SQLite storage
+  db.py       SQLite storage and schema migrations
   llm.py      model factory
   cli.py      command line
+  text.py     HTML to plain text
+  dedupe.py   duplicate detection across sources
+  ingest.py   title filter, dedupe and save
+  eligibility.py  title pass, requirements vs profile, verdicts
+  sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text)
+  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise)
+              structured_prompts.json holds every step's prompt text and few-shot examples
 tests/
 ```
 
@@ -73,3 +101,5 @@ tests/
 ```bash
 uv run pytest
 ```
+
+Exercise tests show as `x` (expected failure) until the exercise is done. Tests that call a real model are skipped unless `AUTOTAILOR_LIVE=1` is set.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -28,32 +29,76 @@ class PostingStatus(StrEnum):
     RESOLVED = "resolved"  # full description available
 
 
+RequirementField = Literal[
+    "degree_levels",
+    "undergraduates_only",
+    "enrollment_required",
+    "graduation_window",
+    "majors",
+    "work_authorization",
+]
+
+
+class Evidence(BaseModel):
+    field: RequirementField = Field(description="Which requirement this quote supports.")
+    quote: str = Field(
+        description="Exact words copied from the posting, short (one sentence or less)."
+    )
+
+
 class Requirements(BaseModel):
-    """What a posting requires of applicants. Every claim needs quoted evidence."""
+    """What a posting requires of applicants, as the posting states it.
+
+    Every stated requirement needs an Evidence quote. Anything the posting does
+    not state stays empty/null: no guessing from the company or the role.
+    """
 
     degree_levels: list[DegreeLevel] = Field(
         default_factory=list,
-        description="Degree levels the posting accepts. Empty if not stated.",
+        description="Degree levels the posting accepts (being pursued or completed). "
+        "Empty if not stated.",
     )
     undergraduates_only: bool = Field(
-        default=False, description="True only if the posting explicitly excludes graduate students."
+        default=False,
+        description="True only if the posting explicitly limits applicants to undergraduates.",
     )
     enrollment_required: bool | None = Field(
         default=None,
-        description="True if the applicant must be a current student; None if not stated.",
+        description="True if applicants must be currently enrolled students; null if not stated.",
     )
     graduation_earliest: date | None = Field(
-        default=None, description="Earliest acceptable graduation date, if stated."
+        default=None,
+        description="Earliest acceptable graduation date, if a graduation timeframe is stated.",
     )
     graduation_latest: date | None = Field(
-        default=None, description="Latest acceptable graduation date, if stated."
+        default=None,
+        description="Latest acceptable graduation date, if a graduation timeframe is stated.",
     )
-    majors: list[str] = Field(default_factory=list)
-    work_authorization: str | None = None
-    evidence: dict[str, str] = Field(
-        default_factory=dict,
-        description="Field name -> exact quote from the posting supporting that field.",
+    majors: list[str] = Field(
+        default_factory=list, description="Fields of study the posting asks for. Empty if not stated."
     )
+    work_authorization: str | None = Field(
+        default=None,
+        description="Work authorization or sponsorship requirement, briefly. Null if not stated.",
+    )
+    evidence: list[Evidence] = Field(
+        default_factory=list,
+        description="One quote from the posting for each requirement stated above.",
+    )
+
+    def quotes_for(self, field: RequirementField) -> list[str]:
+        return [e.quote for e in self.evidence if e.field == field]
+
+    def is_empty(self) -> bool:
+        return not (
+            self.degree_levels
+            or self.undergraduates_only
+            or self.enrollment_required is not None
+            or self.graduation_earliest
+            or self.graduation_latest
+            or self.majors
+            or self.work_authorization
+        )
 
 
 class JobPosting(BaseModel):

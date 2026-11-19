@@ -1,0 +1,33 @@
+Skip to main content
+Jobs   Saved   Sign in
+Northwind Robotics
+
+Software Engineering Intern, Perception (Summer 2027)
+Pittsburgh, PA · Hybrid · Internship
+Apply now    Save
+
+About Northwind Robotics
+Northwind Robotics builds autonomous inventory robots for warehouses. Our fleet of
+800 robots scans shelves nightly for 40 retail partners.
+
+About the role
+As a Software Engineering Intern on the Perception team, you will help our robots
+see. You will work with senior engineers on object detection and shelf-label reading.
+
+What you'll do
+- Train and evaluate computer vision models in PyTorch
+- Write production Python and C++ for on-robot inference
+- Build tools to label and visualize sensor data
+
+What we're looking for
+- Currently pursuing a Bachelor's or Master's degree in Computer Science or a related field
+- Graduating between December 2027 and June 2029
+- Experience with Python; C++ is a plus
+- Coursework or projects in machine learning or computer vision
+
+This is a 12-week paid internship starting June 2027. Pay: $45-$55/hour.
+
+Similar jobs
+Mechanical Engineering Intern · Northwind Robotics
+Data Analyst · Fabrikam Logistics
+Cookie settings   Privacy   Terms

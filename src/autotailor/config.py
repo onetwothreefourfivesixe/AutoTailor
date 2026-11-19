@@ -91,6 +91,11 @@ class SourceSettings(_Model):
     ats_boards: bool = True
     paste: bool = True
     runway_email: bool = True
+    # Keep a board posting only if its title contains one of these terms (whole
+    # words, case-insensitive, plural allowed). Empty keeps every title.
+    title_include: list[str] = Field(default_factory=list)
+    # Drop a board posting whose title contains any of these terms.
+    title_exclude: list[str] = Field(default_factory=list)
     # company slug lists per ATS, e.g. greenhouse = ["figma", "scaleai"]
     greenhouse: list[str] = Field(default_factory=list)
     lever: list[str] = Field(default_factory=list)

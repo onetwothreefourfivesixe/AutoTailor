@@ -19,7 +19,7 @@ from autotailor.config import (
 )
 from autotailor.cv import MasterCV, load_master_cv
 from autotailor.llm import model_kwargs
-from autotailor.models import JobPosting, PostingStatus, Requirements, Source
+from autotailor.models import Evidence, JobPosting, PostingStatus, Requirements, Source
 
 # --- config ---------------------------------------------------------------
 
@@ -136,7 +136,8 @@ def test_db_roundtrip(tmp_path):
         status=PostingStatus.RESOLVED,
         external_score=0.95,
         requirements=Requirements(
-            degree_levels=[DegreeLevel.MASTER], evidence={"degree_levels": "Master's required"}
+            degree_levels=[DegreeLevel.MASTER],
+            evidence=[Evidence(field="degree_levels", quote="Master's required")],
         ),
     )
     db.upsert_posting(conn, p)
