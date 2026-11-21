@@ -37,6 +37,8 @@ Then:
 | `autotailor jobs list` / `jobs show <id>` | Browse stored postings; `-v eligible` filters by verdict, `show` gives the reasons. |
 | `autotailor screen` | Check eligibility: titles first, then each posting's requirements against your profile. |
 | `autotailor screen --rejudge` | Recompute verdicts after changing your profile or `[eligibility]` rules; no model calls. |
+| `autotailor rank` | Rank eligible postings: local embedding similarity to your CV, then model fit scores for the top `run.shortlist_size`. |
+| `autotailor shortlist` | Show the postings that will be tailored next (fit ≥ `run.min_fit_score`, up to `run.jobs_per_run`). |
 
 ## Job sources
 
@@ -74,6 +76,54 @@ provider = "ollama"
 model = "qwen3-vl:4b-instruct"
 ```
 
+Ranking also uses an embedding model, set under `[models.embeddings]`: local `nomic-embed-text` by default (`ollama pull nomic-embed-text`), or a cloud one.
+
+| Provider | `provider` value | Example `model` | Key |
+|---|---|---|---|
+| Ollama | `ollama` | `nomic-embed-text` | none |
+| OpenAI | `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
+| Google Gemini | `google_genai` | `gemini-embedding-001` | `GOOGLE_API_KEY` |
+
+Anthropic has no embeddings API, so with Claude for the chat steps, pick OpenAI or Gemini embeddings (or keep Ollama).
+
+### All local, mixed, or cloud only
+
+Any combination works; `autotailor doctor` reports which one you have.
+
+```toml
+# All local: nothing leaves your machine. Needs Ollama and enough RAM/VRAM.
+[models.default]
+provider = "ollama"
+model = "qwen3-vl:4b-instruct"
+[models.embeddings]
+provider = "ollama"
+model = "nomic-embed-text"
+```
+
+```toml
+# Mixed: cheap steps local, writing in the cloud.
+[models.default]
+provider = "ollama"
+model = "qwen3-vl:4b-instruct"
+[models.steps.tailor]
+provider = "google_genai"
+model = "gemini-2.5-pro"
+```
+
+```toml
+# Cloud only: no Ollama needed.
+[models.default]
+provider = "google_genai"
+model = "gemini-2.5-pro"
+[models.embeddings]
+provider = "google_genai"
+model = "gemini-embedding-001"
+```
+
+Ollama models read at most `context_window` tokens at once (default 16384, set per model block). Ollama's own default is much smaller and cuts long prompts without an error, so lower it only if you run short of memory.
+
+Embedding vectors are cached per provider and model, so switching embedding models re-embeds everything once.
+
 `autotailor doctor` shows, per step, whether data leaves your machine, and checks that the key for each cloud provider in use is set.
 
 ## Layout
@@ -90,8 +140,9 @@ src/autotailor/
   dedupe.py   duplicate detection across sources
   ingest.py   title filter, dedupe and save
   eligibility.py  title pass, requirements vs profile, verdicts
+  matching.py     embedding pre-rank, profile text, fit score, shortlist
   sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text)
-  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise)
+  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise)
               structured_prompts.json holds every step's prompt text and few-shot examples
 tests/
 ```

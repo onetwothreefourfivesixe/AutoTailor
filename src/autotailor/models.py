@@ -127,12 +127,48 @@ class Verdict(StrEnum):
     UNCLEAR = "unclear"
 
 
+class CriterionScore(BaseModel):
+    score: int = Field(ge=1, le=5, description="1 (poor) to 5 (excellent), per the rubric.")
+    reason: str = Field(description="One or two sentences citing the posting and the candidate's experience.")
+
+
+class FitAssessment(BaseModel):
+    """How well the candidate fits one posting. Produced by the M3 fit-scoring chain."""
+
+    skills: CriterionScore = Field(
+        description="Does the candidate have the skills and tools the posting requires?"
+    )
+    experience: CriterionScore = Field(
+        description="How relevant is the candidate's past work and projects to this role's actual work?"
+    )
+    level: CriterionScore = Field(
+        description="Does the role's expected experience level suit the candidate (e.g. an internship "
+        "for a student, not '5+ years')?"
+    )
+    interests: CriterionScore = Field(
+        description="How closely does the role match the candidate's stated role interests?"
+    )
+    missing: list[str] = Field(
+        default_factory=list,
+        description="Required qualifications the candidate clearly lacks. Empty if none.",
+    )
+    relevant_bullet_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs (in [brackets] in the profile) of the 3-8 CV bullets most relevant to this "
+        "posting, best first. Only IDs that appear in the profile.",
+    )
+
+
 class Match(BaseModel):
     posting_id: str
     verdict: Verdict
     verdict_reasons: list[str] = Field(default_factory=list)
+    prescore: float | None = Field(
+        default=None, description="Embedding similarity to the CV (cheap pre-rank), roughly 0-1."
+    )
     fit_score: float | None = Field(default=None, ge=0.0, le=1.0)
     fit_reasons: list[str] = Field(default_factory=list)
+    fit: FitAssessment | None = None
 
 
 class ArtifactKind(StrEnum):

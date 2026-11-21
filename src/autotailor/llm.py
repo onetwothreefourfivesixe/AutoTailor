@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from autotailor.config import ModelSpec, Settings, Step
+from autotailor.config import EmbeddingSpec, ModelSpec, Settings, Step
 from autotailor.paths import get_paths
 
 if TYPE_CHECKING:
@@ -71,7 +71,11 @@ def model_kwargs(spec: ModelSpec, settings: Settings) -> dict[str, Any]:
     if spec.provider == "google_genai":
         return {"max_output_tokens": spec.max_tokens}
     if spec.provider == "ollama":
-        return {"base_url": settings.models.ollama_base_url, "num_predict": spec.max_tokens}
+        return {
+            "base_url": settings.models.ollama_base_url,
+            "num_predict": spec.max_tokens,
+            "num_ctx": spec.context_window,
+        }
     raise ValueError(f"Unknown provider: {spec.provider}")
 
 
@@ -86,6 +90,13 @@ def get_chat_model(settings: Settings, step: Step) -> BaseChatModel:
     )
 
 
-def describe(spec: ModelSpec) -> str:
+def describe(spec: ModelSpec | EmbeddingSpec) -> str:
     where = "local" if spec.is_local else "cloud: sends data off this machine"
     return f"{spec.provider}:{spec.model} ({where})"
+
+
+MODE_DESCRIPTIONS = {
+    "local": "all local: no posting or CV text leaves this machine",
+    "cloud": "cloud only: posting and CV text is sent to the providers below",
+    "mixed": "mixed: steps marked 'cloud' send posting or CV text to that provider",
+}

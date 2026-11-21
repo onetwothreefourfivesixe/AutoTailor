@@ -88,6 +88,7 @@ def test_model_kwargs_per_provider():
     assert model_kwargs(ModelSpec(provider="ollama", model="m"), s) == {
         "base_url": "http://localhost:11434",
         "num_predict": 16000,
+        "num_ctx": 16384,
     }
 
 

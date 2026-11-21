@@ -85,6 +85,11 @@ class RunSettings(_Model):
     max_runs_per_day: int = Field(default=3, ge=1)
     max_runs_per_week: int = Field(default=10, ge=1)
     min_fit_score: float = Field(default=0.6, ge=0.0, le=1.0)
+    shortlist_size: int = Field(
+        default=25,
+        ge=1,
+        description="How many postings (best embedding similarity first) get a model fit score per run.",
+    )
 
 
 class SourceSettings(_Model):
@@ -124,6 +129,12 @@ class ModelSpec(_Model):
     provider: Provider = "anthropic"
     model: str = "claude-opus-5-5"
     max_tokens: int = Field(default=16000, ge=256)
+    context_window: int = Field(
+        default=16384,
+        ge=2048,
+        description="Ollama only: tokens the model reads at once (prompt plus answer). Ollama's own "
+        "default is small and silently cuts longer prompts. Larger values use more memory.",
+    )
 
     @property
     def is_local(self) -> bool:
@@ -131,14 +142,63 @@ class ModelSpec(_Model):
         return self.provider == "ollama"
 
 
+EmbeddingProvider = Literal["ollama", "openai", "google_genai"]
+
+# nomic-embed-text models expect these task prefixes; other models don't use any.
+_NOMIC_PREFIXES = ("search_query: ", "search_document: ")
+
+
+class EmbeddingSpec(_Model):
+    """Embedding model used to pre-rank postings: local (Ollama) or cloud (OpenAI, Gemini).
+
+    Anthropic has no embeddings API, so a Claude-only setup pairs with one of these.
+    """
+
+    provider: EmbeddingProvider = "ollama"
+    model: str = "nomic-embed-text"
+    # Leave unset to pick automatically (nomic models get their task prefixes,
+    # others none). Set to "" to force no prefix.
+    query_prefix: str | None = None
+    document_prefix: str | None = None
+    max_chars: int = Field(default=6000, ge=200, description="Posting text beyond this is cut.")
+
+    @property
+    def is_local(self) -> bool:
+        return self.provider == "ollama"
+
+    @property
+    def prefixes(self) -> tuple[str, str]:
+        """(query prefix, document prefix) actually used."""
+        auto = _NOMIC_PREFIXES if "nomic" in self.model.lower() else ("", "")
+        return (
+            auto[0] if self.query_prefix is None else self.query_prefix,
+            auto[1] if self.document_prefix is None else self.document_prefix,
+        )
+
+    @property
+    def cache_key(self) -> str:
+        """Identifies vectors in the embedding cache; vectors from different models never mix."""
+        return f"{self.provider}:{self.model}"
+
+
 class ModelSettings(_Model):
     default: ModelSpec = Field(default_factory=ModelSpec)
+    embeddings: EmbeddingSpec = Field(default_factory=EmbeddingSpec)
     # Per-step overrides; a step not listed here uses `default`.
     steps: dict[Step, ModelSpec] = Field(default_factory=dict)
     ollama_base_url: str = "http://localhost:11434"
 
     def for_step(self, step: Step) -> ModelSpec:
         return self.steps.get(step, self.default)
+
+    def mode(self) -> Literal["local", "cloud", "mixed"]:
+        """Whether every model (chat steps and embeddings) runs locally, in the cloud, or both."""
+        local = [self.for_step(step).is_local for step in STEPS] + [self.embeddings.is_local]
+        if all(local):
+            return "local"
+        if not any(local):
+            return "cloud"
+        return "mixed"
 
 
 # --- Root ------------------------------------------------------------------

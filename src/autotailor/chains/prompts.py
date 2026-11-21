@@ -5,9 +5,9 @@ File format, per step name:
     "system":   list of lines (joined with newlines), plain text
     "human":    the final human message template; its {variables} are the prompt's inputs
     "examples": optional few-shot examples, each with
-                  - one key per variable in "human" other than "text" (e.g. "today")
-                  - "posting": list of lines, used as {text}
-                  - "answer":  the ideal structured output, as real JSON
+                  - one key per variable in "human" (e.g. "text", "today"); a value
+                    may be a list of lines. "posting" is accepted for {text}.
+                  - "answer": the ideal structured output, as real JSON
 
 Each example becomes a human message (the "human" template filled in) plus an
 AI message (the answer). Literal braces are escaped automatically, so nothing
@@ -18,6 +18,7 @@ schema when loaded, so a typo like "bs" for "bachelor" fails immediately.
 from __future__ import annotations
 
 import json
+import string
 from functools import cache
 from importlib import resources
 from typing import Any
@@ -67,8 +68,17 @@ def load_prompt(step: str, schema: type[BaseModel] | None = None) -> ChatPromptT
                 schema.model_validate(answer)
             except Exception as e:
                 raise ValueError(f"{PROMPTS_FILE}: {step} example {i + 1} answer is invalid:\n{e}") from e
-        values = {k: _escape(str(v)) for k, v in example.items() if k not in ("posting", "answer")}
-        values["text"] = _escape(_text(example["posting"]))
+        values = {
+            k: _escape(_text(v) if isinstance(v, list) else str(v))
+            for k, v in example.items()
+            if k != "answer"
+        }
+        variables = {name for _, name, _, _ in string.Formatter().parse(human) if name}
+        if "text" in variables and "text" not in values and "posting" in values:
+            values["text"] = values.pop("posting")  # older examples name the posting "posting"
+        missing = variables - values.keys()
+        if missing:
+            raise ValueError(f"{PROMPTS_FILE}: {step} example {i + 1} lacks {sorted(missing)}")
         messages.append(("human", human.format(**values)))
         messages.append(("ai", _escape(json.dumps(answer, indent=2, ensure_ascii=False))))
 

@@ -1,0 +1,21 @@
+Role interests: Machine Learning / AI Intern; Software Engineering Intern
+
+Education:
+- bachelor in Computer Science (in progress, expected May 2029), Example University
+- [edu-coursework] Coursework: Machine Learning, Computer Vision, Data Structures
+
+Skills:
+- Languages: Python, C++, SQL
+- Frameworks & Libraries: PyTorch, OpenCV, NumPy
+
+Work experience:
+## Research Intern | University Vision Lab | Jun. 2026 – Aug. 2026
+- [exp-lab-detector] Trained a YOLO-based object detector in PyTorch on 12k labeled warehouse images, reaching 0.81 mAP
+- [exp-lab-labeling] Built a Python tool to label and visualize camera and depth-sensor data, used by 6 researchers
+- [exp-lab-cpp] Ported the detector's preprocessing to C++, cutting on-device latency by 35%
+
+Projects:
+## Shelf-Label Reader
+- [proj-ocr] Built an OCR pipeline with OpenCV and a CRNN model to read price labels from shelf photos
+## Budget Tracker App
+- [proj-budget] Built a personal budgeting web app with a SQL database and monthly spending charts

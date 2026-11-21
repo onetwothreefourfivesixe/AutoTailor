@@ -130,5 +130,19 @@
                 }
             }
         ]
+    },
+    "score_fit": {
+        "system": [
+            "You are a part of an auto resume tailoring system. Your job is to take in information about a job posting and CV bullets (with IDs, skills, interests, education) and grade the fit of the job. Grade each of the four criteria (skills, experience, level, interests) separately from 1 to 5, using these anchors:",
+            "5: skills: nearly all of the posting's listed skills (required and preferred) appear in my profile; experience: my past work or projects did closely similar tasks in the same domain; level: the role is pitched at my stage (e.g. an internship while I am a student); interests: the role is one of my stated role interests",
+            "4: skills: my profile has most of the posting's listed required skills, but is missing some preferred qualifications; experience: I have done related work in a neighboring domain or with the same tools; level: the role fits my stage with a small stretch (e.g. it prefers one prior internship); interests: the role is closely related to one of my stated interests",
+            "3: skills: my profile has most of the posting's listed required skills, but is missing most or all preferred qualifications; experience: I have some transferable work, but in a different domain or only through coursework; level: a noticeable stretch (e.g. it prefers a later class year or more experience than I have); interests: the role is loosely related to my interests",
+            "2: skills: my profile has only some of the posting's listed required skills; experience: my experience is only tangentially related; level: the role is aimed clearly above my stage (e.g. it expects years of professional experience); interests: the role is only tangentially related to my interests",
+            "1: skills: my profile has few or none of the required skills; experience: I have no relevant experience; level: clearly the wrong level (e.g. a senior or management role); interests: the role is unrelated to my interests",
+            "Remember that if the profile says I am a student, applying to an internship is a good level fit; \"3+ years ofrofessional experience\" for a student is not.",
+            "Include any missing skills into the missing section of the structured output, along with associated evidence. Only include missing required items, and leave out those related to interest. This field can be empty.",
+            "Ensure any and all grade decisions made have an associated piece of evidence from the job posting and my CV. List the IDs (from the [brackets] in the profile) of the 3–8 CV bullets most relevant to this posting in relevant_bullet_ids, best first."
+        ],
+        "human": "Profile: {profile}, posting: {posting}"
     }
 }

@@ -12,9 +12,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from autotailor.dedupe import dedupe_key, locations_compatible, normalize_url
-from autotailor.models import JobPosting, Match, PostingStatus, Requirements, Verdict
+from autotailor.models import FitAssessment, JobPosting, Match, PostingStatus, Requirements, Verdict
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS postings (
@@ -86,10 +86,27 @@ def _backfill_v2(conn: sqlite3.Connection) -> None:
         )
 
 
+# v3: matching (M3). Pre-rank score and full fit assessment per match, and a
+# cache of embedding vectors keyed by what was embedded and with which model.
+_SCHEMA_V3 = """
+ALTER TABLE matches ADD COLUMN prescore REAL;
+ALTER TABLE matches ADD COLUMN fit_json TEXT;
+CREATE TABLE IF NOT EXISTS embeddings (
+    key        TEXT NOT NULL,                    -- e.g. 'posting:<id>', 'cv:<bullet id>', 'interests'
+    model      TEXT NOT NULL,
+    text_hash  TEXT NOT NULL,                    -- recompute when the embedded text changes
+    dim        INTEGER NOT NULL,
+    vector     BLOB NOT NULL,                    -- float32, little-endian
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (key, model)
+);
+"""
+
 # Each step upgrades the schema from version N-1 to version N.
 _MIGRATIONS = {
     1: (_SCHEMA_V1, None),
     2: (_SCHEMA_V2, _backfill_v2),
+    3: (_SCHEMA_V3, None),
 }
 
 
@@ -303,8 +320,68 @@ def _row_to_match(row: sqlite3.Row) -> Match:
         posting_id=row["posting_id"],
         verdict=row["verdict"],
         verdict_reasons=json.loads(row["verdict_reasons_json"]),
+        prescore=row["prescore"],
         fit_score=row["fit_score"],
         fit_reasons=json.loads(row["fit_reasons_json"]),
+        fit=FitAssessment.model_validate_json(row["fit_json"]) if row["fit_json"] else None,
+    )
+
+
+def save_prescore(conn: sqlite3.Connection, posting_id: str, prescore: float) -> None:
+    """Store the embedding pre-rank score. The posting must already have a match row."""
+    conn.execute(
+        "UPDATE matches SET prescore = ?, updated_at = ? WHERE posting_id = ?",
+        (prescore, _now(), posting_id),
+    )
+    conn.commit()
+
+
+def save_fit(
+    conn: sqlite3.Connection,
+    posting_id: str,
+    fit_score: float,
+    fit_reasons: list[str],
+    fit: FitAssessment,
+) -> None:
+    """Store a fit score. The posting must already have a match row."""
+    conn.execute(
+        "UPDATE matches SET fit_score = ?, fit_reasons_json = ?, fit_json = ?, updated_at = ?"
+        " WHERE posting_id = ?",
+        (fit_score, json.dumps(fit_reasons), fit.model_dump_json(), _now(), posting_id),
+    )
+    conn.commit()
+
+
+def get_embedding(
+    conn: sqlite3.Connection, key: str, model: str, text_hash: str
+) -> list[float] | None:
+    """Cached vector, or None if missing or computed from different text."""
+    import array
+
+    row = conn.execute(
+        "SELECT text_hash, vector FROM embeddings WHERE key = ? AND model = ?", (key, model)
+    ).fetchone()
+    if row is None or row["text_hash"] != text_hash:
+        return None
+    vec = array.array("f")
+    vec.frombytes(row["vector"])
+    return vec.tolist()
+
+
+def put_embedding(
+    conn: sqlite3.Connection, key: str, model: str, text_hash: str, vector: list[float]
+) -> None:
+    import array
+
+    conn.execute(
+        """
+        INSERT INTO embeddings (key, model, text_hash, dim, vector, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (key, model) DO UPDATE SET
+            text_hash = excluded.text_hash, dim = excluded.dim,
+            vector = excluded.vector, created_at = excluded.created_at
+        """,
+        (key, model, text_hash, len(vector), array.array("f", vector).tobytes(), _now()),
     )
 
 

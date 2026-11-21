@@ -15,7 +15,7 @@ from autotailor import __version__, db
 from autotailor.config import STEPS, Settings, load_settings, save_settings, set_value
 from autotailor.cv import load_master_cv
 from autotailor.ingest import ingest
-from autotailor.llm import API_KEY_ENV, ENV_TEMPLATE, describe, load_api_keys
+from autotailor.llm import API_KEY_ENV, ENV_TEMPLATE, MODE_DESCRIPTIONS, describe, load_api_keys
 from autotailor.models import PostingStatus, Source, Verdict
 from autotailor.paths import get_paths
 
@@ -120,15 +120,28 @@ def doctor() -> None:
         check("database", False, "run `autotailor init`")
 
     load_api_keys(paths.env)
-    key_vars: set[str] = set()
-    for step in STEPS:
-        spec = settings.models.for_step(step)
-        if not spec.is_local:
-            key_vars.add(API_KEY_ENV[spec.provider])
-        typer.echo(f"     model[{step}] = {describe(spec)}")
-    for var in sorted(key_vars):
+    models = settings.models
+    typer.echo(f"     models: {MODE_DESCRIPTIONS[models.mode()]}")
+    specs = [(step, models.for_step(step)) for step in STEPS] + [("embeddings", models.embeddings)]
+    for name, spec in specs:
+        typer.echo(f"     model[{name}] = {describe(spec)}")
+    for var in sorted({API_KEY_ENV[spec.provider] for _, spec in specs if not spec.is_local}):
         has_key = bool(os.environ.get(var))
         check(var, has_key, "" if has_key else f"not set; add it to {paths.env}")
+
+    local_models = sorted({spec.model for _, spec in specs if spec.is_local})
+    if local_models:
+        try:
+            r = httpx.get(f"{models.ollama_base_url.rstrip('/')}/api/tags", timeout=5)
+            r.raise_for_status()
+            pulled = {m["name"] for m in r.json().get("models", [])}
+        except httpx.HTTPError as e:
+            check("Ollama", False, f"not reachable at {models.ollama_base_url} ({e.__class__.__name__})")
+        else:
+            check("Ollama", True, models.ollama_base_url)
+            for model in local_models:
+                found = model in pulled or f"{model}:latest" in pulled
+                check(f"ollama model {model}", found, "" if found else f"run `ollama pull {model}`")
 
     raise typer.Exit(0 if ok else 1)
 
@@ -362,6 +375,16 @@ def jobs_show(
             typer.echo(f"  - {reason}")
     else:
         typer.echo("\nEligibility: not screened yet (run `autotailor screen`)")
+    if m and (m.prescore is not None or m.fit_score is not None):
+        typer.echo("\nMatch:")
+        if m.prescore is not None:
+            typer.echo(f"  Embedding similarity: {m.prescore:.3f}")
+        if m.fit_score is not None:
+            typer.echo(f"  Fit score: {m.fit_score:.2f}")
+            for reason in m.fit_reasons:
+                typer.echo(f"  - {reason}")
+        if m.fit and m.fit.relevant_bullet_ids:
+            typer.echo(f"  Most relevant CV bullets: {', '.join(m.fit.relevant_bullet_ids)}")
     if p.description:
         limit = None if full else 1500
         body = p.description[:limit]
@@ -432,6 +455,14 @@ def screen(
                 err=True,
             )
             results = []
+        except Exception as e:  # e.g. missing API key, Ollama down, unknown model name
+            skipped = 0
+            typer.secho(
+                f"Could not run the extraction model ({describe(spec)}): {e}\nUsing titles only for now.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            results = []
         failed = 0
         for p, result in zip(to_read, results, strict=False):
             if isinstance(result, Exception):
@@ -457,6 +488,143 @@ def screen(
     if skipped:
         typer.echo(f"{skipped} more postings still need reading; run `autotailor screen` again.")
     typer.echo("See `autotailor jobs list -v eligible` and `autotailor jobs show <id>` for reasons.")
+
+
+# --- matching (M3) ----------------------------------------------------------
+
+
+def _print_ranking(conn, settings: Settings, limit: int) -> None:
+    from autotailor.matching import ranked
+
+    rows = ranked(conn, settings)[:limit]
+    if not rows:
+        typer.echo("Nothing ranked yet.")
+        return
+    min_fit = settings.run.min_fit_score
+    id_width = max(len(p.id) for p, _ in rows)
+    typer.echo(f"{'fit':>5}  {'sim':>5}  {'verdict':<10}  {'id':<{id_width}}  company / title")
+    for p, m in rows:
+        fit = f"{m.fit_score:.2f}" if m.fit_score is not None else "  -  "
+        sim = f"{m.prescore:.3f}" if m.prescore is not None else "  -  "
+        color = typer.colors.GREEN if m.fit_score is not None and m.fit_score >= min_fit else None
+        typer.echo(
+            typer.style(f"{fit:>5}", fg=color)
+            + f"  {sim:>5}  {m.verdict.value:<10}  {p.id:<{id_width}}  {p.company[:22]} | {p.title[:60]}"
+        )
+
+
+@app.command()
+def rank(
+    rescore: bool = typer.Option(False, "--rescore", help="Fit-score the shortlist again, even if scored before."),
+    show: int = typer.Option(None, "--show", "-n", min=1, help="Rows to print (default: shortlist size)."),
+) -> None:
+    """Rank eligible postings: local embedding pre-rank, then fit scores for the shortlist.
+
+    Run `autotailor screen` first; only postings that pass eligibility are ranked.
+    """
+    from autotailor import matching
+    from autotailor.chains.score_fit import score_fit_batch
+    from autotailor.eligibility import passes_gate
+
+    settings = _settings()
+    paths = get_paths()
+    try:
+        cv = load_master_cv(paths.master_cv)
+    except (OSError, ValidationError, ValueError) as e:
+        _fail(f"Cannot read the master CV: {e}")
+        return
+    conn = db.connect(paths.db)
+    matches = db.all_matches(conn)
+    candidates = [
+        p
+        for p in db.list_postings(conn, None)
+        if p.id in matches and p.description and passes_gate(matches[p.id].verdict, settings.eligibility)
+    ]
+    if not candidates:
+        _fail("No eligible postings to rank. Run `autotailor fetch` or `add`, then `autotailor screen`.")
+
+    spec = settings.models.embeddings
+    typer.echo(f"Pre-ranking {len(candidates)} postings with embeddings from {describe(spec)} ...", err=True)
+    try:
+        prescores = matching.prescore_postings(conn, candidates, cv, settings)
+    except Exception as e:  # Ollama down / model not pulled, or a missing key or bad model name
+        hint = (
+            f"Is Ollama running, and is the model pulled? Try `ollama pull {spec.model}`."
+            if spec.is_local
+            else f"Check {API_KEY_ENV[spec.provider]} in .env and the model name under [models.embeddings]."
+        )
+        _fail(f"Embedding failed: {e}\n{hint}")
+        return
+    for pid, score in prescores.items():
+        db.save_prescore(conn, pid, score)
+
+    shortlisted = sorted(candidates, key=lambda p: prescores[p.id], reverse=True)[: settings.run.shortlist_size]
+    to_score = [p for p in shortlisted if rescore or matches[p.id].fit is None]
+    if to_score:
+        score_spec = settings.models.for_step("score")
+        typer.echo(f"Fit-scoring {len(to_score)} postings with {describe(score_spec)} ...", err=True)
+        try:
+            results = score_fit_batch(
+                [matching.posting_text(p, 12000) for p in to_score],
+                matching.profile_text(cv, settings.profile),
+                settings,
+                max_concurrency=1 if score_spec.is_local else 4,
+            )
+        except NotImplementedError:
+            typer.secho(
+                "The fit-scoring chain is not written yet (M3 exercise in "
+                "src/autotailor/chains/score_fit.py). Ranking by embedding similarity only.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            results = []
+        except Exception as e:  # e.g. missing API key, Ollama down, unknown model name
+            typer.secho(
+                f"Could not run the fit-scoring model ({describe(score_spec)}): {e}\n"
+                "Ranking by embedding similarity only.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            results = []
+        failed = 0
+        for p, result in zip(to_score, results, strict=False):
+            if isinstance(result, Exception):
+                failed += 1
+                typer.secho(f"{p.id}: fit scoring failed: {result}", fg=typer.colors.RED, err=True)
+                continue
+            cleaned, dropped = matching.clean_assessment(result, cv)
+            if dropped:
+                typer.secho(f"{p.id}: ignored unknown CV bullet IDs {dropped}", fg=typer.colors.YELLOW, err=True)
+            db.save_fit(conn, p.id, matching.compute_fit_score(cleaned), matching.fit_reasons(cleaned), cleaned)
+        if failed:
+            typer.secho(f"{failed} postings could not be scored.", fg=typer.colors.RED, err=True)
+
+    _print_ranking(conn, settings, show or settings.run.shortlist_size)
+    picked = matching.shortlist(conn, settings)
+    conn.close()
+    typer.echo(
+        f"\n{len(picked)} postings meet the minimum fit score ({settings.run.min_fit_score}) "
+        f"for tailoring (up to {settings.run.jobs_per_run} per run). See `autotailor shortlist`."
+    )
+
+
+@app.command("shortlist")
+def shortlist_cmd() -> None:
+    """Show the postings that will be tailored next (best fit first)."""
+    from autotailor.matching import shortlist
+
+    settings = _settings()
+    conn = db.connect(get_paths().db)
+    picked = shortlist(conn, settings)
+    conn.close()
+    if not picked:
+        typer.echo(
+            f"No postings meet the minimum fit score ({settings.run.min_fit_score}) yet. "
+            "Run `autotailor rank`, or lower run.min_fit_score."
+        )
+        return
+    for i, (p, m) in enumerate(picked, 1):
+        typer.echo(f"{i:>2}. {m.fit_score:.2f}  {p.id}  {p.company} | {p.title}")
 
 
 if __name__ == "__main__":
