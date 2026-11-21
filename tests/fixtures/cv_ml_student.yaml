@@ -1,0 +1,42 @@
+# Synthetic master CV for tests; matches profile_ml_student.txt.
+contact:
+  name: Sam Example
+  email: sam@example.com
+education:
+  - id: edu-example
+    school: Example University
+    degree: B.S.
+    field: Computer Science
+    graduation: Expected May 2029
+    details:
+      - id: edu-coursework
+        text: "Coursework: Machine Learning, Computer Vision, Data Structures"
+experience:
+  - id: exp-lab
+    title: Research Intern
+    organization: University Vision Lab
+    start: Jun. 2026
+    end: Aug. 2026
+    bullets:
+      - id: exp-lab-detector
+        text: Trained a YOLO-based object detector in PyTorch on 12k labeled warehouse images, reaching 0.81 mAP
+      - id: exp-lab-labeling
+        text: Built a Python tool to label and visualize camera and depth-sensor data, used by 6 researchers
+      - id: exp-lab-cpp
+        text: Ported the detector's preprocessing to C++, cutting on-device latency by 35%
+projects:
+  - id: proj-shelf
+    title: Shelf-Label Reader
+    bullets:
+      - id: proj-ocr
+        text: Built an OCR pipeline with OpenCV and a CRNN model to read price labels from shelf photos
+  - id: proj-budget-app
+    title: Budget Tracker App
+    bullets:
+      - id: proj-budget
+        text: Built a personal budgeting web app with a SQL database and monthly spending charts
+skills:
+  - name: Languages
+    items: [Python, C++, SQL]
+  - name: Frameworks & Libraries
+    items: [PyTorch, OpenCV, NumPy]

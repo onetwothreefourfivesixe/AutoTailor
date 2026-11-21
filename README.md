@@ -39,6 +39,7 @@ Then:
 | `autotailor screen --rejudge` | Recompute verdicts after changing your profile or `[eligibility]` rules; no model calls. |
 | `autotailor rank` | Rank eligible postings: local embedding similarity to your CV, then model fit scores for the top `run.shortlist_size`. |
 | `autotailor shortlist` | Show the postings that will be tailored next (fit ≥ `run.min_fit_score`, up to `run.jobs_per_run`). |
+| `autotailor tailor` | Write a tailored resume (PDF and Word) plus the posting for each shortlisted role, into `data/outputs/<date>-run<N>/`. Every resume must pass verification against your CV. |
 
 ## Job sources
 
@@ -141,8 +142,9 @@ src/autotailor/
   ingest.py   title filter, dedupe and save
   eligibility.py  title pass, requirements vs profile, verdicts
   matching.py     embedding pre-rank, profile text, fit score, shortlist
+  resume/     verify.py (nothing beyond the CV), layout.py, render.py (Typst PDF, Word), output.py
   sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text)
-  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise)
+  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph)
               structured_prompts.json holds every step's prompt text and few-shot examples
 tests/
 ```

@@ -260,9 +260,33 @@ def ranked(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPostin
     return rows
 
 
+def same_role(p: JobPosting, rows: list[tuple[JobPosting, Match]]) -> list[JobPosting]:
+    """Other postings for the same company and title (e.g. one per city), from `rows`."""
+    from autotailor.dedupe import dedupe_key
+
+    key = dedupe_key(p.company, p.title)
+    return [q for q, _ in rows if q.id != p.id and dedupe_key(q.company, q.title) == key]
+
+
 def shortlist(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPosting, Match]]:
-    """The top `run.jobs_per_run` postings whose fit score meets `run.min_fit_score`."""
+    """The top `run.jobs_per_run` roles whose fit score meets `run.min_fit_score`.
+
+    A role posted several times (same company and title, e.g. one per city) takes
+    one slot, represented by its best-scoring posting: one tailored resume fits all.
+    """
+    from autotailor.dedupe import dedupe_key
+
     run = settings.run
-    return [
-        (p, m) for p, m in ranked(conn, settings) if m.fit_score is not None and m.fit_score >= run.min_fit_score
-    ][: run.jobs_per_run]
+    picked: list[tuple[JobPosting, Match]] = []
+    seen: set[str] = set()
+    for p, m in ranked(conn, settings):
+        if m.fit_score is None or m.fit_score < run.min_fit_score:
+            continue
+        key = dedupe_key(p.company, p.title)
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append((p, m))
+        if len(picked) == run.jobs_per_run:
+            break
+    return picked

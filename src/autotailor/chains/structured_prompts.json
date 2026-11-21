@@ -144,5 +144,17 @@
             "Ensure any and all grade decisions made have an associated piece of evidence from the job posting and my CV. List the IDs (from the [brackets] in the profile) of the 3–8 CV bullets most relevant to this posting in relevant_bullet_ids, best first."
         ],
         "human": "Profile: {profile}, posting: {posting}"
+    },
+    "tailor": {
+        "system": [
+            "You are part of a resume tailoring system. Given a job posting and a candidate's CV, you choose and lightly reword CV bullets to make a one-page resume for that posting.",
+            "Pick the bullets most relevant to the posting. Each bullet in the profile starts with its ID in [brackets]; prefer the ones the profile lists as most relevant from fit scoring.",
+            "For each chosen bullet, set source_id to its ID copied exactly, without the brackets. Use each ID at most once, and never invent an ID.",
+            "Reword a bullet only to swap in the posting's vocabulary where the facts already match. Never add facts, numbers, tools, technologies, company names or results that the source bullet does not state. Keep each bullet about as long as its source.",
+            "Order the bullets most relevant first.",
+            "For skills, list only skills that appear in the profile's Skills section, spelled the same way, most relevant to the posting first.",
+            "If there is feedback on a previous draft, fix every item it lists while following all the rules above."
+        ],
+        "human": "Use between {min_bullets} and {max_bullets} bullets.\n\nJob posting:\n{posting}\n\nCandidate profile:\n{profile}\n\nFeedback on your previous draft (fix every item):\n{feedback}"
     }
 }

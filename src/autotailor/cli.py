@@ -627,5 +627,101 @@ def shortlist_cmd() -> None:
         typer.echo(f"{i:>2}. {m.fit_score:.2f}  {p.id}  {p.company} | {p.title}")
 
 
+# --- tailoring (M4) ---------------------------------------------------------
+
+
+@app.command()
+def tailor(
+    posting_ids: list[str] = typer.Argument(None, help="Only these postings. Default: the shortlist."),
+    force: bool = typer.Option(False, "--force", help="Tailor again even if a resume already exists."),
+) -> None:
+    """Write a tailored resume (PDF, Word) plus the posting for each shortlisted role.
+
+    Each resume is drafted by the tailoring graph and must pass verification
+    against the master CV; a draft that still fails after the allowed attempts
+    is reported, not written.
+    """
+    from datetime import date
+
+    from autotailor import matching
+    from autotailor.chains.tailor_graph import tailor_posting
+    from autotailor.models import ArtifactKind
+    from autotailor.resume.output import write_outputs
+
+    settings = _settings()
+    paths = get_paths()
+    try:
+        cv = load_master_cv(paths.master_cv)
+    except (OSError, ValidationError, ValueError) as e:
+        _fail(f"Cannot read the master CV: {e}")
+        return
+    conn = db.connect(paths.db)
+    rows = matching.ranked(conn, settings)
+    if posting_ids:
+        targets = []
+        for pid in posting_ids:
+            p = db.get_posting(conn, pid)
+            if p is None or not p.description:
+                typer.secho(f"{pid}: not found or has no description; skipped.", fg=typer.colors.YELLOW, err=True)
+                continue
+            targets.append((p, db.get_match(conn, pid)))
+    else:
+        targets = matching.shortlist(conn, settings)
+    if not force:
+        done = [p for p, _ in targets if any(a["kind"] == ArtifactKind.RESUME_PDF for a in db.artifacts_for(conn, p.id))]
+        if done:
+            typer.echo(f"Skipping {len(done)} already tailored (use --force to redo).", err=True)
+        targets = [(p, m) for p, m in targets if p not in done]
+    if not targets:
+        conn.close()
+        typer.echo("Nothing to tailor. Run `autotailor rank` (see `autotailor shortlist`), or pass posting IDs.")
+        return
+
+    spec = settings.models.for_step("tailor")
+    run_id = db.start_run(conn, settings.model_dump_json())
+    out_root = paths.outputs / f"{date.today().isoformat()}-run{run_id}"
+    typer.echo(f"Tailoring {len(targets)} resumes with {describe(spec)} ...", err=True)
+    base_profile = matching.profile_text(cv, settings.profile)
+    counts = {"tailored": 0, "failed": 0}
+    for i, (p, m) in enumerate(targets, 1):
+        profile = base_profile
+        if m and m.fit and m.fit.relevant_bullet_ids:
+            profile += "\n\nMost relevant CV bullets for this posting (from fit scoring): " + ", ".join(
+                m.fit.relevant_bullet_ids
+            )
+        label = f"{i:>2}. {p.company} | {p.title}"
+        try:
+            result = tailor_posting(matching.posting_text(p, 12000), profile, cv, settings)
+        except NotImplementedError:
+            db.finish_run(conn, run_id, "failed", counts)
+            conn.close()
+            _fail("The tailoring graph is not written yet: it is the M4 exercise in src/autotailor/chains/tailor_graph.py.")
+            return
+        except Exception as e:  # model errors, missing key, invalid output after retries
+            counts["failed"] += 1
+            typer.secho(f"{label}: failed: {e}", fg=typer.colors.RED, err=True)
+            continue
+        if result.resume is None or result.errors:
+            counts["failed"] += 1
+            typer.secho(
+                f"{label}: no resume written; the last of {result.attempts} drafts still had problems:",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            for err in result.errors[:5]:
+                typer.secho(f"      - {err}", fg=typer.colors.RED, err=True)
+            continue
+        w = write_outputs(out_root, i, p, m, result.resume, cv, matching.same_role(p, rows))
+        model = f"{spec.provider}:{spec.model}"
+        for kind, path in ((ArtifactKind.RESUME_PDF, w.pdf), (ArtifactKind.RESUME_DOCX, w.docx), (ArtifactKind.RESUME_DATA, w.data)):
+            db.add_artifact(conn, run_id, p.id, kind.value, str(path.relative_to(paths.outputs)), model)
+        counts["tailored"] += 1
+        pages = "" if w.pages <= 1 else typer.style(f"  ({w.pages} pages: lower tailor.max_bullets?)", fg=typer.colors.YELLOW)
+        typer.echo(f"{label}  ({result.attempts} draft{'s' if result.attempts > 1 else ''}){pages}")
+    db.finish_run(conn, run_id, "done", counts)
+    conn.close()
+    typer.echo(f"\n{counts['tailored']} tailored, {counts['failed']} failed. Output: {out_root}")
+
+
 if __name__ == "__main__":
     app()

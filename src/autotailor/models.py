@@ -159,6 +159,28 @@ class FitAssessment(BaseModel):
     )
 
 
+class TailoredBullet(BaseModel):
+    source_id: str = Field(description="ID of the master-CV bullet this is based on, copied exactly.")
+    text: str = Field(
+        description="The bullet, lightly rephrased toward the posting's wording. Same facts, same "
+        "numbers, nothing added that the source bullet does not say."
+    )
+
+
+class TailoredResume(BaseModel):
+    """A one-page resume tailored to one posting, built only from master-CV bullets."""
+
+    bullets: list[TailoredBullet] = Field(
+        description="The CV bullets to include, most relevant first. Entries (jobs, projects) "
+        "appear on the resume only if at least one of their bullets is chosen."
+    )
+    skills: list[str] = Field(
+        default_factory=list,
+        description="Skills from the CV's skills section most relevant to the posting, most "
+        "relevant first. Only skills that appear in the CV.",
+    )
+
+
 class Match(BaseModel):
     posting_id: str
     verdict: Verdict

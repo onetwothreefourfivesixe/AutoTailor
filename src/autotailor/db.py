@@ -397,6 +397,39 @@ def all_matches(conn: sqlite3.Connection, verdict: Verdict | None = None) -> dic
     return {r["posting_id"]: _row_to_match(r) for r in conn.execute(sql, args).fetchall()}
 
 
+def start_run(conn: sqlite3.Connection, settings_json: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO runs (started_at, status, settings_json) VALUES (?, 'running', ?)",
+        (_now(), settings_json),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def finish_run(conn: sqlite3.Connection, run_id: int, status: str, counts: dict[str, int]) -> None:
+    conn.execute(
+        "UPDATE runs SET finished_at = ?, status = ?, counts_json = ? WHERE id = ?",
+        (_now(), status, json.dumps(counts), run_id),
+    )
+    conn.commit()
+
+
+def add_artifact(
+    conn: sqlite3.Connection, run_id: int, posting_id: str, kind: str, path: str, model: str | None
+) -> None:
+    conn.execute(
+        "INSERT INTO artifacts (run_id, posting_id, kind, path, model, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (run_id, posting_id, kind, path, model, _now()),
+    )
+    conn.commit()
+
+
+def artifacts_for(conn: sqlite3.Connection, posting_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM artifacts WHERE posting_id = ? ORDER BY created_at DESC, id DESC", (posting_id,)
+    ).fetchall()
+
+
 def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # noqa: S608 (fixed names)

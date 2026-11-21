@@ -92,6 +92,15 @@ class RunSettings(_Model):
     )
 
 
+class TailorSettings(_Model):
+    min_bullets: int = Field(default=6, ge=1, description="Fewest bullets on a tailored resume.")
+    max_bullets: int = Field(default=14, ge=1, description="Most bullets (keeps it to one page).")
+    max_attempts: int = Field(default=3, ge=1, description="Drafts before giving up on a posting.")
+    length_growth: float = Field(
+        default=1.3, ge=1.0, description="A rephrased bullet may be at most this many times its source's length."
+    )
+
+
 class SourceSettings(_Model):
     ats_boards: bool = True
     paste: bool = True
@@ -208,6 +217,7 @@ class Settings(_Model):
     profile: Profile = Field(default_factory=Profile)
     eligibility: EligibilityRules = Field(default_factory=EligibilityRules)
     run: RunSettings = Field(default_factory=RunSettings)
+    tailor: TailorSettings = Field(default_factory=TailorSettings)
     sources: SourceSettings = Field(default_factory=SourceSettings)
     mail: MailSettings = Field(default_factory=MailSettings)
     models: ModelSettings = Field(default_factory=ModelSettings)
