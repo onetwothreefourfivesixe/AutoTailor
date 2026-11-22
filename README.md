@@ -39,7 +39,16 @@ Then:
 | `autotailor screen --rejudge` | Recompute verdicts after changing your profile or `[eligibility]` rules; no model calls. |
 | `autotailor rank` | Rank eligible postings: local embedding similarity to your CV, then model fit scores for the top `run.shortlist_size`. |
 | `autotailor shortlist` | Show the postings that will be tailored next (fit ≥ `run.min_fit_score`, up to `run.jobs_per_run`). |
-| `autotailor tailor` | Write a tailored resume (PDF and Word) plus the posting for each shortlisted role, into `data/outputs/<date>-run<N>/`. Every resume must pass verification against your CV. |
+| `autotailor tailor` | Tailor a resume (PDF and Word) for each shortlisted role, `run.parallel_jobs` at a time, into `data/outputs/<date>-run<N>/` with a `report.md`. Every resume must pass verification against your CV. |
+| `autotailor resume [run]` | Continue a run stopped with Ctrl-C or by an error; finished resumes are not redone. |
+| `autotailor runs` | Past runs: status, results and report location. |
+| `autotailor run` | The whole pipeline: `fetch`, `screen`, `rank`, `tailor`. |
+
+### Runs
+
+Each `tailor` (or `run`) is one run. Its folder holds one subfolder per role (PDF, Word, `tailored.json`, `posting.md` with the apply link and the eligibility and fit reasons) and `report.md`, which links them all and lists any role that wasn't tailored, with the reasons.
+
+`run.max_runs_per_day` and `run.max_runs_per_week` cap new runs (resuming doesn't count); `--ignore-limits` overrides them once. Press Ctrl-C to stop a run: jobs in progress finish and are saved, and `autotailor resume` does the rest. Progress is saved in `data/checkpoints.db`.
 
 ## Job sources
 
@@ -142,9 +151,10 @@ src/autotailor/
   ingest.py   title filter, dedupe and save
   eligibility.py  title pass, requirements vs profile, verdicts
   matching.py     embedding pre-rank, profile text, fit score, shortlist
+  batch.py        batch runs: jobs, worker, run limits, checkpoints, outputs, report.md
   resume/     verify.py (nothing beyond the CV), layout.py, render.py (Typst PDF, Word), output.py
   sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text)
-  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph)
+  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph), batch_graph.py (M5 exercise, fan-out and checkpoints)
               structured_prompts.json holds every step's prompt text and few-shot examples
 tests/
 ```

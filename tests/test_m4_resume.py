@@ -191,10 +191,10 @@ def test_cli_tailor(home, monkeypatch):
     r = runner.invoke(app, ["tailor"])
     assert r.exit_code == 0, r.output
     assert "1 tailored, 1 failed" in r.output
-    assert "no resume written; the last of 3 drafts" in r.output and "'ghost'" in r.output
+    assert "no resume written: the last of 3 drafts" in r.output and "'ghost'" in r.output
     assert "Most relevant CV bullets for this posting (from fit scoring): exp-lab-detector" in seen_profiles[0]
 
-    folders = list((home / "data" / "outputs").glob("*-run1/*"))
+    folders = [f for f in (home / "data" / "outputs").glob("*-run1/*") if f.is_dir()]
     assert [f.name for f in folders] == ["01-acme-swe-intern"]
     files = sorted(x.name for x in folders[0].iterdir())
     assert files == ["posting.md", "sam-example-resume.docx", "sam-example-resume.pdf", "tailored.json"]

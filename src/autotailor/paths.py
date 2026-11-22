@@ -37,6 +37,11 @@ class Paths:
         return self.data / "autotailor.db"
 
     @property
+    def checkpoints(self) -> Path:
+        """LangGraph checkpoints for batch runs, so an interrupted run can resume."""
+        return self.data / "checkpoints.db"
+
+    @property
     def inbox(self) -> Path:
         """Drop folder for .eml files (the default mail intake)."""
         return self.data / "inbox"

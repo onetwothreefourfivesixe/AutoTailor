@@ -139,9 +139,10 @@
             "3: skills: my profile has most of the posting's listed required skills, but is missing most or all preferred qualifications; experience: I have some transferable work, but in a different domain or only through coursework; level: a noticeable stretch (e.g. it prefers a later class year or more experience than I have); interests: the role is loosely related to my interests",
             "2: skills: my profile has only some of the posting's listed required skills; experience: my experience is only tangentially related; level: the role is aimed clearly above my stage (e.g. it expects years of professional experience); interests: the role is only tangentially related to my interests",
             "1: skills: my profile has few or none of the required skills; experience: I have no relevant experience; level: clearly the wrong level (e.g. a senior or management role); interests: the role is unrelated to my interests",
-            "Remember that if the profile says I am a student, applying to an internship is a good level fit; \"3+ years ofrofessional experience\" for a student is not.",
+            "Remember that if the profile says I am a student, applying to an internship is a good level fit; \"3+ years of professional experience\" for a student is not.",
             "Include any missing skills into the missing section of the structured output, along with associated evidence. Only include missing required items, and leave out those related to interest. This field can be empty.",
-            "Ensure any and all grade decisions made have an associated piece of evidence from the job posting and my CV. List the IDs (from the [brackets] in the profile) of the 3–8 CV bullets most relevant to this posting in relevant_bullet_ids, best first."
+            "Ensure any and all grade decisions made have an associated piece of evidence from the job posting and my CV.",
+            "List the IDs of the 3–8 CV bullets most relevant to this posting in relevant_bullet_ids, best first. Each bullet in the profile starts with its ID in brackets; copy the ID exactly but without the brackets (write exp-lab-detector, not [exp-lab-detector]). Only use IDs that appear in the profile."
         ],
         "human": "Profile: {profile}, posting: {posting}"
     },

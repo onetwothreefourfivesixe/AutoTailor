@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS runs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at    TEXT NOT NULL,
     finished_at   TEXT,
-    status        TEXT NOT NULL,                 -- running | done | failed
+    status        TEXT NOT NULL,                 -- running | interrupted | done | failed
     settings_json TEXT NOT NULL,                 -- snapshot of settings used
     counts_json   TEXT NOT NULL DEFAULT '{}'     -- pulled, ineligible, unclear, tailored
 );
@@ -412,6 +412,41 @@ def finish_run(conn: sqlite3.Connection, run_id: int, status: str, counts: dict[
         (_now(), status, json.dumps(counts), run_id),
     )
     conn.commit()
+
+
+def get_run(conn: sqlite3.Connection, run_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+
+
+def list_runs(conn: sqlite3.Connection, limit: int | None = 20) -> list[sqlite3.Row]:
+    sql = "SELECT * FROM runs ORDER BY id DESC"
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    return conn.execute(sql).fetchall()
+
+
+def unfinished_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Runs that were interrupted or never finished (e.g. the process was killed), newest first."""
+    return conn.execute(
+        "SELECT * FROM runs WHERE status IN ('running', 'interrupted') ORDER BY id DESC"
+    ).fetchall()
+
+
+def count_runs_since(conn: sqlite3.Connection, since: datetime) -> int:
+    """Runs started at or after `since` that count toward the run limits (failed ones don't)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE started_at >= ? AND status != 'failed'",
+        (since.astimezone(UTC).isoformat(timespec="seconds"),),
+    ).fetchone()[0]
+
+
+def set_run_status(conn: sqlite3.Connection, run_id: int, status: str) -> None:
+    conn.execute("UPDATE runs SET status = ? WHERE id = ?", (status, run_id))
+    conn.commit()
+
+
+def run_artifacts(conn: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM artifacts WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()
 
 
 def add_artifact(

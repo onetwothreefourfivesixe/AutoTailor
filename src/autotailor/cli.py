@@ -630,33 +630,10 @@ def shortlist_cmd() -> None:
 # --- tailoring (M4) ---------------------------------------------------------
 
 
-@app.command()
-def tailor(
-    posting_ids: list[str] = typer.Argument(None, help="Only these postings. Default: the shortlist."),
-    force: bool = typer.Option(False, "--force", help="Tailor again even if a resume already exists."),
-) -> None:
-    """Write a tailored resume (PDF, Word) plus the posting for each shortlisted role.
-
-    Each resume is drafted by the tailoring graph and must pass verification
-    against the master CV; a draft that still fails after the allowed attempts
-    is reported, not written.
-    """
-    from datetime import date
-
+def _tailor_targets(conn, settings: Settings, posting_ids: list[str] | None, force: bool) -> list:
     from autotailor import matching
-    from autotailor.chains.tailor_graph import tailor_posting
     from autotailor.models import ArtifactKind
-    from autotailor.resume.output import write_outputs
 
-    settings = _settings()
-    paths = get_paths()
-    try:
-        cv = load_master_cv(paths.master_cv)
-    except (OSError, ValidationError, ValueError) as e:
-        _fail(f"Cannot read the master CV: {e}")
-        return
-    conn = db.connect(paths.db)
-    rows = matching.ranked(conn, settings)
     if posting_ids:
         targets = []
         for pid in posting_ids:
@@ -668,59 +645,242 @@ def tailor(
     else:
         targets = matching.shortlist(conn, settings)
     if not force:
-        done = [p for p, _ in targets if any(a["kind"] == ArtifactKind.RESUME_PDF for a in db.artifacts_for(conn, p.id))]
+        done = {
+            p.id for p, _ in targets
+            if any(a["kind"] == ArtifactKind.RESUME_PDF for a in db.artifacts_for(conn, p.id))
+        }  # fmt: skip
         if done:
             typer.echo(f"Skipping {len(done)} already tailored (use --force to redo).", err=True)
-        targets = [(p, m) for p, m in targets if p not in done]
+        targets = [(p, m) for p, m in targets if p.id not in done]
+    return targets
+
+
+def _execute_run(conn, settings: Settings, cv, run_id: int, jobs: list | None) -> None:
+    """Run (or resume) the batch graph for one run, then write its outputs and report."""
+    import threading
+
+    from autotailor import batch
+    from autotailor.chains.batch_graph import build_batch_graph, run_batch
+
+    paths = get_paths()
+    spec = settings.models.for_step("tailor")
+    model = f"{spec.provider}:{spec.model}"
+    cancel = threading.Event()
+    parallel = settings.run.parallel_jobs
+    with batch.open_checkpointer(paths.checkpoints) as saver:
+        if jobs is None and not batch.has_checkpoint(saver, run_id):
+            db.finish_run(conn, run_id, "failed", {})
+            _fail(f"Run {run_id} has nothing saved to resume from. Start a new one with `autotailor tailor`.")
+        work = batch.make_worker(cv, settings, cancel)
+        try:
+            graph = build_batch_graph(work, saver)
+        except NotImplementedError:
+            graph = None
+            if jobs is None:
+                db.finish_run(conn, run_id, "failed", {})
+                _fail("Resuming needs the batch graph: the M5 exercise in src/autotailor/chains/batch_graph.py.")
+            typer.secho(
+                "The batch graph is not written yet (M5 exercise in src/autotailor/chains/batch_graph.py): "
+                "tailoring one at a time, and Ctrl-C loses this run's progress.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        try:
+            if graph is None:
+                results = [work(j) for j in jobs]
+            else:
+                with batch.interrupt_guard(cancel, parallel):
+                    results = run_batch(graph, jobs, batch.thread_id(run_id), parallel)
+        except NotImplementedError as e:
+            db.finish_run(conn, run_id, "failed", {})
+            if "M5" in str(e):
+                _fail(f"Not written yet: {e} (src/autotailor/chains/batch_graph.py).")
+            _fail("The tailoring graph is not written yet: it is the M4 exercise in src/autotailor/chains/tailor_graph.py.")
+            return
+        except (KeyboardInterrupt, batch.Cancelled):
+            if graph is None:
+                db.finish_run(conn, run_id, "failed", {})
+                typer.secho(f"\nRun {run_id} stopped; nothing was saved.", fg=typer.colors.YELLOW, err=True)
+                raise typer.Exit(130) from None
+            db.set_run_status(conn, run_id, "interrupted")
+            typer.secho(
+                f"\nRun {run_id} stopped. Finished resumes are saved; `autotailor resume` continues it.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(130) from None
+        except Exception as e:
+            db.set_run_status(conn, run_id, "interrupted")
+            _fail(f"Run {run_id} stopped: {type(e).__name__}: {e}\n`autotailor resume` continues it.")
+            return
+
+    run = db.get_run(conn, run_id)
+    folder = batch.run_folder(paths.outputs, run)
+    rows = batch.save_results(conn, run_id, folder, paths.outputs, results, cv, settings, model)
+    report = batch.write_report(folder, run, model, rows)
+    counts = batch.counts(rows)
+    db.finish_run(conn, run_id, "done", counts)
+
+    for r in rows:
+        name = f"{r.posting.company} | {r.posting.title}" if r.posting else r.result["posting_id"]
+        label = f"{r.index:>2}. {name}"
+        if r.result["status"] == "tailored" and r.files:
+            n = r.result["attempts"]
+            pages = "" if r.pages <= 1 else typer.style(f"  ({r.pages} pages: lower tailor.max_bullets?)", fg=typer.colors.YELLOW)
+            typer.echo(f"{label}  ({n} draft{'s' if n != 1 else ''}){pages}")
+        else:
+            typer.secho(f"{label}: no resume written: {r.result['message']}", fg=typer.colors.RED, err=True)
+            for err in r.result["errors"][:5]:
+                typer.secho(f"      - {err}", fg=typer.colors.RED, err=True)
+    typer.echo(f"\n{counts['tailored']} tailored, {counts['failed']} failed. Report: {report}")
+
+
+def _load_cv_or_fail():
+    try:
+        return load_master_cv(get_paths().master_cv)
+    except (OSError, ValidationError, ValueError) as e:
+        _fail(f"Cannot read the master CV: {e}")
+
+
+@app.command()
+def tailor(
+    posting_ids: list[str] = typer.Argument(None, help="Only these postings. Default: the shortlist."),
+    force: bool = typer.Option(False, "--force", help="Tailor again even if a resume already exists."),
+    ignore_limits: bool = typer.Option(
+        False, "--ignore-limits", help="Run even if run.max_runs_per_day/week is reached."
+    ),
+) -> None:
+    """Tailor a resume (PDF, Word) for each shortlisted role, in parallel, plus a run report.
+
+    Each resume is drafted by the tailoring graph and must pass verification
+    against the master CV; one that still fails after the allowed attempts is
+    reported, not written. Ctrl-C stops the run; `autotailor resume` continues it.
+    """
+    from autotailor import batch
+
+    settings = _settings()
+    cv = _load_cv_or_fail()
+    conn = db.connect(get_paths().db)
+    if not ignore_limits and (why := batch.limit_message(conn, settings.run)):
+        conn.close()
+        _fail(f"Run limit reached: {why} Use --ignore-limits, or raise the limit with `autotailor config set`.")
+    unfinished = db.unfinished_runs(conn)
+    if unfinished:
+        ids = ", ".join(str(r["id"]) for r in unfinished)
+        typer.secho(f"Unfinished run(s) {ids}: `autotailor resume` continues the latest.", fg=typer.colors.YELLOW, err=True)
+    targets = _tailor_targets(conn, settings, posting_ids, force)
     if not targets:
         conn.close()
         typer.echo("Nothing to tailor. Run `autotailor rank` (see `autotailor shortlist`), or pass posting IDs.")
         return
 
-    spec = settings.models.for_step("tailor")
+    jobs = batch.make_jobs(targets, cv, settings)
     run_id = db.start_run(conn, settings.model_dump_json())
-    out_root = paths.outputs / f"{date.today().isoformat()}-run{run_id}"
-    typer.echo(f"Tailoring {len(targets)} resumes with {describe(spec)} ...", err=True)
-    base_profile = matching.profile_text(cv, settings.profile)
-    counts = {"tailored": 0, "failed": 0}
-    for i, (p, m) in enumerate(targets, 1):
-        profile = base_profile
-        if m and m.fit and m.fit.relevant_bullet_ids:
-            profile += "\n\nMost relevant CV bullets for this posting (from fit scoring): " + ", ".join(
-                m.fit.relevant_bullet_ids
-            )
-        label = f"{i:>2}. {p.company} | {p.title}"
-        try:
-            result = tailor_posting(matching.posting_text(p, 12000), profile, cv, settings)
-        except NotImplementedError:
-            db.finish_run(conn, run_id, "failed", counts)
+    spec = settings.models.for_step("tailor")
+    typer.echo(
+        f"Run {run_id}: tailoring {len(jobs)} resumes with {describe(spec)}, "
+        f"{settings.run.parallel_jobs} at a time ...",
+        err=True,
+    )
+    try:
+        _execute_run(conn, settings, cv, run_id, jobs)
+    finally:
+        conn.close()
+
+
+@app.command()
+def resume(
+    run_id: int = typer.Argument(None, help="Run to continue. Default: the latest unfinished run."),
+) -> None:
+    """Continue a run that was stopped part way; finished resumes are not redone."""
+    settings = _settings()
+    cv = _load_cv_or_fail()
+    conn = db.connect(get_paths().db)
+    if run_id is None:
+        unfinished = db.unfinished_runs(conn)
+        if not unfinished:
             conn.close()
-            _fail("The tailoring graph is not written yet: it is the M4 exercise in src/autotailor/chains/tailor_graph.py.")
+            typer.echo("No unfinished runs.")
             return
-        except Exception as e:  # model errors, missing key, invalid output after retries
-            counts["failed"] += 1
-            typer.secho(f"{label}: failed: {e}", fg=typer.colors.RED, err=True)
-            continue
-        if result.resume is None or result.errors:
-            counts["failed"] += 1
-            typer.secho(
-                f"{label}: no resume written; the last of {result.attempts} drafts still had problems:",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            for err in result.errors[:5]:
-                typer.secho(f"      - {err}", fg=typer.colors.RED, err=True)
-            continue
-        w = write_outputs(out_root, i, p, m, result.resume, cv, matching.same_role(p, rows))
-        model = f"{spec.provider}:{spec.model}"
-        for kind, path in ((ArtifactKind.RESUME_PDF, w.pdf), (ArtifactKind.RESUME_DOCX, w.docx), (ArtifactKind.RESUME_DATA, w.data)):
-            db.add_artifact(conn, run_id, p.id, kind.value, str(path.relative_to(paths.outputs)), model)
-        counts["tailored"] += 1
-        pages = "" if w.pages <= 1 else typer.style(f"  ({w.pages} pages: lower tailor.max_bullets?)", fg=typer.colors.YELLOW)
-        typer.echo(f"{label}  ({result.attempts} draft{'s' if result.attempts > 1 else ''}){pages}")
-    db.finish_run(conn, run_id, "done", counts)
+        run_id = unfinished[0]["id"]
+    run = db.get_run(conn, run_id)
+    if run is None:
+        conn.close()
+        _fail(f"No run {run_id}. See `autotailor runs`.")
+    typer.echo(f"Resuming run {run_id} (started {run['started_at']}) ...", err=True)
+    db.set_run_status(conn, run_id, "running")
+    try:
+        _execute_run(conn, settings, cv, run_id, None)
+    finally:
+        conn.close()
+
+
+@app.command()
+def runs(limit: int = typer.Option(20, "--limit", "-n", min=1, help="Most recent runs to show.")) -> None:
+    """Show past tailoring runs, with their results and output folders."""
+    from datetime import datetime
+
+    from autotailor import batch
+
+    paths = get_paths()
+    conn = db.connect(paths.db)
+    rows = db.list_runs(conn, limit)
     conn.close()
-    typer.echo(f"\n{counts['tailored']} tailored, {counts['failed']} failed. Output: {out_root}")
+    if not rows:
+        typer.echo("No runs yet. `autotailor tailor` starts one.")
+        return
+    colors = {"done": typer.colors.GREEN, "interrupted": typer.colors.YELLOW, "running": typer.colors.YELLOW,
+              "failed": typer.colors.RED}  # fmt: skip
+    for r in rows:
+        c = batch.parse_counts(r)
+        started = datetime.fromisoformat(r["started_at"]).astimezone()
+        summary = f"{c.get('tailored', 0)} tailored, {c.get('failed', 0)} not" if c else ""
+        status = typer.style(f"{r['status']:<11}", fg=colors.get(r["status"]))
+        folder = batch.run_folder(paths.outputs, r)
+        where = str(folder / "report.md") if (folder / "report.md").exists() else ""
+        typer.echo(f"{r['id']:>4}  {started:%Y-%m-%d %H:%M}  {status}  {summary:<22}  {where}")
+
+
+@app.command("run")
+def run_all(
+    skip_fetch: bool = typer.Option(False, "--skip-fetch", help="Don't pull from the job boards first."),
+    ignore_limits: bool = typer.Option(
+        False, "--ignore-limits", help="Run even if run.max_runs_per_day/week is reached."
+    ),
+) -> None:
+    """The whole pipeline: fetch, screen, rank, then tailor the top X.
+
+    Stops early if a step has nothing to pass on.
+    """
+    from autotailor import batch
+
+    settings = _settings()
+    conn = db.connect(get_paths().db)
+    why = None if ignore_limits else batch.limit_message(conn, settings.run)
+    conn.close()
+    if why:
+        _fail(f"Run limit reached: {why} Use --ignore-limits, or raise the limit with `autotailor config set`.")
+
+    def step(title: str) -> None:
+        typer.secho(f"\n== {title}", bold=True)
+
+    if skip_fetch:
+        pass
+    elif not settings.sources.ats_boards or not _configured_boards(settings):
+        typer.echo("No job boards configured; skipping fetch.", err=True)
+    else:
+        step("Fetch")
+        try:
+            fetch(board=None, no_filter=False)
+        except typer.Exit as e:
+            if e.exit_code:
+                typer.secho("Every board failed; continuing with stored postings.", fg=typer.colors.YELLOW, err=True)
+    step("Screen")
+    screen(posting_ids=None, rejudge=False, reextract=False, limit=50)
+    step("Rank")
+    rank(rescore=False, show=None)
+    step("Tailor")
+    tailor(posting_ids=None, force=False, ignore_limits=True)
 
 
 if __name__ == "__main__":

@@ -82,13 +82,19 @@ class EligibilityRules(_Model):
 
 class RunSettings(_Model):
     jobs_per_run: int = Field(default=10, ge=1, description="Resumes tailored per run (top X).")
-    max_runs_per_day: int = Field(default=3, ge=1)
-    max_runs_per_week: int = Field(default=10, ge=1)
+    max_runs_per_day: int = Field(default=3, ge=1, description="Tailoring runs allowed per calendar day.")
+    max_runs_per_week: int = Field(default=10, ge=1, description="Tailoring runs allowed in any 7 days.")
     min_fit_score: float = Field(default=0.6, ge=0.0, le=1.0)
     shortlist_size: int = Field(
         default=25,
         ge=1,
         description="How many postings (best embedding similarity first) get a model fit score per run.",
+    )
+    parallel_jobs: int = Field(
+        default=2,
+        ge=1,
+        description="Resumes tailored at the same time. Ollama queues requests beyond its own "
+        "OLLAMA_NUM_PARALLEL, so more than 2 rarely helps with a local model.",
     )
 
 

@@ -10,9 +10,14 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from autotailor.config import DegreeLevel
+
+
+def _bare_id(raw: str) -> str:
+    """Models often copy a CV bullet ID with its brackets ("[exp-1]"); keep just the ID."""
+    return raw.strip().strip("[]").strip()
 
 
 class Source(StrEnum):
@@ -158,6 +163,11 @@ class FitAssessment(BaseModel):
         "posting, best first. Only IDs that appear in the profile.",
     )
 
+    @field_validator("relevant_bullet_ids")
+    @classmethod
+    def _bare_ids(cls, v: list[str]) -> list[str]:
+        return [_bare_id(x) for x in v]
+
 
 class TailoredBullet(BaseModel):
     source_id: str = Field(description="ID of the master-CV bullet this is based on, copied exactly.")
@@ -165,6 +175,11 @@ class TailoredBullet(BaseModel):
         description="The bullet, lightly rephrased toward the posting's wording. Same facts, same "
         "numbers, nothing added that the source bullet does not say."
     )
+
+    @field_validator("source_id")
+    @classmethod
+    def _bare_source_id(cls, v: str) -> str:
+        return _bare_id(v)
 
 
 class TailoredResume(BaseModel):
