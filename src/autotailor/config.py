@@ -127,7 +127,8 @@ class MailSettings(_Model):
     imap: bool = False  # B: Gmail label pull (M7)
     imap_host: str = "imap.gmail.com"
     imap_label: str = "Runway"
-    imap_user: str = ""  # password lives in the OS keyring, never here
+    imap_user: str = ""  # password: OS keyring, or AUTOTAILOR_IMAP_PASSWORD in .env; never here
+    imap_days: int = Field(default=14, ge=1, description="How far back each IMAP pull looks.")
     smtp_listener: bool = False  # A: optional local listener (M7)
     smtp_port: int = 8025
     allowed_senders: list[str] = Field(default_factory=lambda: ["hello@tower.joinrunway.io"])

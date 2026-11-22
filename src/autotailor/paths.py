@@ -42,6 +42,16 @@ class Paths:
         return self.data / "checkpoints.db"
 
     @property
+    def cv_backups(self) -> Path:
+        """Previous versions of the master CV, one per save from the UI."""
+        return self.data / "cv_backups"
+
+    @property
+    def config_backups(self) -> Path:
+        """Previous versions of config.toml, one per save from the UI."""
+        return self.data / "config_backups"
+
+    @property
     def inbox(self) -> Path:
         """Drop folder for .eml files (the default mail intake)."""
         return self.data / "inbox"

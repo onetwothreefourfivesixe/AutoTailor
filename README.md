@@ -42,7 +42,25 @@ Then:
 | `autotailor tailor` | Tailor a resume (PDF and Word) for each shortlisted role, `run.parallel_jobs` at a time, into `data/outputs/<date>-run<N>/` with a `report.md`. Every resume must pass verification against your CV. |
 | `autotailor resume [run]` | Continue a run stopped with Ctrl-C or by an error; finished resumes are not redone. |
 | `autotailor runs` | Past runs: status, results and report location. |
-| `autotailor run` | The whole pipeline: `fetch`, `screen`, `rank`, `tailor`. |
+| `autotailor run` | The whole pipeline: Runway mail, `fetch`, Runway matching, `screen`, `rank`, `tailor`. |
+| `autotailor mail import [files]` | Import Runway emails saved as `.eml` into `data/inbox/` (or the files named). |
+| `autotailor mail pull` | Pull Runway emails from a Gmail label over IMAP (read-only). |
+| `autotailor mail listen` | Local mail server on 127.0.0.1 that accepts Runway emails forwarded from a desktop mail client. |
+| `autotailor runway list` / `runway resolve` | Runway roles, and finding each one's posting on the employer's site (asks you when it can't). |
+| `autotailor ui` | Local web UI at http://127.0.0.1:8501: settings, master CV editor, runs and postings. |
+
+### Web UI
+
+`autotailor ui` starts a local web UI. It listens on 127.0.0.1 only and has Streamlit's usage statistics switched off. On WSL, open the address in a Windows browser.
+
+- **Overview**: which models run where, posting counts, the next shortlist, recent runs.
+- **Settings**: everything in `config.toml`. Saves are validated first, and the previous file is kept in `data/config_backups/`.
+- **Master CV**: edit, add, reorder and remove entries and bullets in every section, or edit the raw YAML. Saves are validated; the previous file is kept in `data/cv_backups/`. New entries and bullets get IDs when saved, and IDs never change. Deleting a bullet that a past resume used asks first and shows where it was used.
+- **Runs**: each run's resumes (PDF and Word downloads), each bullet beside the CV bullet it came from with reworded words marked, and the roles that weren't tailored, with reasons.
+- **Runway**: import emails, see each Runway role's status, and answer the roles waiting for an employer link.
+- **Postings**: every posting, including ineligible ones, with the requirements read from it (and the quoted evidence), the eligibility and fit reasons, and the full text.
+
+Runs are started from the terminal, not the UI, so long model calls don't depend on a browser tab.
 
 ### Runs
 
@@ -64,6 +82,18 @@ ashby = ["openai"]
 ```
 
 LinkedIn, Handshake, Runway, Indeed and Glassdoor are never fetched automatically, because their terms forbid it. For those, copy the posting text and use `autotailor add --file`.
+
+### Runway
+
+Runway's terms forbid automated access to its site, so AutoTailor reads Runway's daily notification emails instead and never opens a Runway link. Each email gives a role's title, company, location and match score, but no description. AutoTailor then looks for the same role on the employer's own job board; when it can't find it, the role waits for you to open the Runway link in your browser and paste the employer's posting URL or text (`autotailor runway resolve`, or the Runway page of the UI).
+
+Getting the emails in, from simplest:
+
+1. **Drop folder** (on by default): in Gmail, open the email, "⋮" > "Download message", save the `.eml` into `data/inbox/`, then `autotailor mail import` (or `autotailor run`).
+2. **Gmail label over IMAP**: add a Gmail filter that labels mail from `hello@tower.joinrunway.io` (e.g. "Runway"), create an app password, then `autotailor config set mail.imap true`, `config set mail.imap_user you@gmail.com`, `config set mail.imap_label Runway`, and `autotailor mail login`. Without a usable OS keyring (e.g. WSL), put `AUTOTAILOR_IMAP_PASSWORD=...` in `.env` instead. Pulls are read-only and never mark mail as read.
+3. **Local mail server**: `autotailor mail listen`, then in a desktop mail client add an outgoing server `127.0.0.1:8025` and forward Runway emails through it.
+
+Only email from `mail.allowed_senders` is read; everything else is ignored.
 
 ## Models
 
@@ -152,9 +182,12 @@ src/autotailor/
   eligibility.py  title pass, requirements vs profile, verdicts
   matching.py     embedding pre-rank, profile text, fit score, shortlist
   batch.py        batch runs: jobs, worker, run limits, checkpoints, outputs, report.md
+  mail.py         Runway mail intake: drop folder, IMAP, local SMTP listener
+  resolve.py      Runway role -> employer posting (job board match, or your link/text)
+  ui/         Streamlit app (app.py, one page_*.py per page); logic.py holds the tested save/ID/diff helpers
   resume/     verify.py (nothing beyond the CV), layout.py, render.py (Typst PDF, Word), output.py
-  sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text)
-  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph), batch_graph.py (M5 exercise, fan-out and checkpoints)
+  sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text), runway.py (email parser)
+  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph), batch_graph.py (M5 exercise, fan-out and checkpoints), resolve_graph.py (M7 exercise, interrupts)
               structured_prompts.json holds every step's prompt text and few-shot examples
 tests/
 ```

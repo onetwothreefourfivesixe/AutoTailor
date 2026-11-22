@@ -14,7 +14,7 @@ from pathlib import Path
 from autotailor.dedupe import dedupe_key, locations_compatible, normalize_url
 from autotailor.models import FitAssessment, JobPosting, Match, PostingStatus, Requirements, Verdict
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS postings (
@@ -103,10 +103,42 @@ CREATE TABLE IF NOT EXISTS embeddings (
 """
 
 # Each step upgrades the schema from version N-1 to version N.
+_SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS mail_messages (
+    message_id  TEXT PRIMARY KEY,
+    origin      TEXT NOT NULL,                  -- drop_folder | imap | smtp
+    sender      TEXT,
+    subject     TEXT,
+    sent_at     TEXT,
+    roles       INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS runway_roles (
+    job_id         TEXT PRIMARY KEY,            -- Runway's job ID, decoded offline from the email link
+    posting_id     TEXT,                        -- the stored posting for it; NULL once skipped
+    company        TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    location       TEXT,
+    company_domain TEXT,                        -- from the logo file name in the email (never fetched)
+    match_score    REAL,
+    message_id     TEXT,
+    status         TEXT NOT NULL DEFAULT 'open', -- open | resolved | skipped
+    seen_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runway_posting ON runway_roles (posting_id);
+CREATE TABLE IF NOT EXISTS company_boards (
+    company_key TEXT PRIMARY KEY,               -- normalize_company(name)
+    source      TEXT NOT NULL,
+    slug        TEXT NOT NULL,
+    learned_at  TEXT NOT NULL
+);
+"""
+
 _MIGRATIONS = {
     1: (_SCHEMA_V1, None),
     2: (_SCHEMA_V2, _backfill_v2),
     3: (_SCHEMA_V3, None),
+    4: (_SCHEMA_V4, None),
 }
 
 
@@ -463,6 +495,82 @@ def artifacts_for(conn: sqlite3.Connection, posting_id: str) -> list[sqlite3.Row
     return conn.execute(
         "SELECT * FROM artifacts WHERE posting_id = ? ORDER BY created_at DESC, id DESC", (posting_id,)
     ).fetchall()
+
+
+def delete_posting(conn: sqlite3.Connection, posting_id: str) -> None:
+    """Remove a posting and its match (e.g. a Runway placeholder merged into the employer's posting)."""
+    conn.execute("DELETE FROM postings WHERE id = ?", (posting_id,))
+    conn.execute("DELETE FROM embeddings WHERE key = ?", (f"posting:{posting_id}",))
+    conn.commit()
+
+
+def set_status(conn: sqlite3.Connection, posting_id: str, status: PostingStatus) -> None:
+    conn.execute("UPDATE postings SET status = ?, updated_at = ? WHERE id = ?", (status.value, _now(), posting_id))
+    conn.commit()
+
+
+# --- mail and Runway (M7) ------------------------------------------------------
+
+
+def mail_seen(conn: sqlite3.Connection, message_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM mail_messages WHERE message_id = ?", (message_id,)).fetchone() is not None
+
+
+def record_mail(
+    conn: sqlite3.Connection, message_id: str, origin: str, sender: str | None, subject: str | None,
+    sent_at: datetime | None, roles: int,
+) -> None:  # fmt: skip
+    conn.execute(
+        "INSERT OR REPLACE INTO mail_messages (message_id, origin, sender, subject, sent_at, roles, imported_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (message_id, origin, sender, subject, sent_at.isoformat() if sent_at else None, roles, _now()),
+    )
+    conn.commit()
+
+
+def runway_role(conn: sqlite3.Connection, job_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM runway_roles WHERE job_id = ?", (job_id,)).fetchone()
+
+
+def runway_role_for_posting(conn: sqlite3.Connection, posting_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM runway_roles WHERE posting_id = ?", (posting_id,)).fetchone()
+
+
+def add_runway_role(
+    conn: sqlite3.Connection, job_id: str, posting_id: str, company: str, title: str, location: str | None,
+    company_domain: str | None, match_score: float | None, message_id: str | None, status: str = "open",
+) -> None:  # fmt: skip
+    conn.execute(
+        "INSERT OR IGNORE INTO runway_roles (job_id, posting_id, company, title, location, company_domain, "
+        "match_score, message_id, status, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (job_id, posting_id, company, title, location, company_domain, match_score, message_id, status, _now()),
+    )
+    conn.commit()
+
+
+def update_runway_role(conn: sqlite3.Connection, job_id: str, posting_id: str | None, status: str) -> None:
+    conn.execute("UPDATE runway_roles SET posting_id = ?, status = ? WHERE job_id = ?", (posting_id, status, job_id))
+    conn.commit()
+
+
+def list_runway_roles(conn: sqlite3.Connection, status: str | None = None) -> list[sqlite3.Row]:
+    sql, args = "SELECT * FROM runway_roles", ()
+    if status:
+        sql, args = sql + " WHERE status = ?", (status,)
+    return conn.execute(sql + " ORDER BY seen_at DESC, job_id", args).fetchall()
+
+
+def learned_board(conn: sqlite3.Connection, company_key: str) -> tuple[str, str] | None:
+    row = conn.execute("SELECT source, slug FROM company_boards WHERE company_key = ?", (company_key,)).fetchone()
+    return (row["source"], row["slug"]) if row else None
+
+
+def learn_board(conn: sqlite3.Connection, company_key: str, source: str, slug: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO company_boards (company_key, source, slug, learned_at) VALUES (?, ?, ?, ?)",
+        (company_key, source, slug, _now()),
+    )
+    conn.commit()
 
 
 def table_counts(conn: sqlite3.Connection) -> dict[str, int]:

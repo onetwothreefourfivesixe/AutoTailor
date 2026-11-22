@@ -155,7 +155,7 @@ def test_migration_v2_to_v3(tmp_path):
     raw.commit()
     raw.close()
     conn = db.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION  # upgrades all the way
     cols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
     assert {"prescore", "fit_json"} <= cols
 

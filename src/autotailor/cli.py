@@ -26,6 +26,10 @@ jobs_app = typer.Typer(no_args_is_help=True, help="Browse stored job postings.")
 app.add_typer(config_app, name="config")
 app.add_typer(cv_app, name="cv")
 app.add_typer(jobs_app, name="jobs")
+mail_app = typer.Typer(no_args_is_help=True, help="Bring in Runway notification emails.")
+runway_app = typer.Typer(no_args_is_help=True, help="Runway roles: list them, find their employer postings.")
+app.add_typer(mail_app, name="mail")
+app.add_typer(runway_app, name="runway")
 
 
 def _fail(message: str) -> None:
@@ -627,6 +631,230 @@ def shortlist_cmd() -> None:
         typer.echo(f"{i:>2}. {m.fit_score:.2f}  {p.id}  {p.company} | {p.title}")
 
 
+# --- Runway mail (M7) ------------------------------------------------------
+
+
+def _mail_summary(result) -> None:  # noqa: ANN001
+    typer.echo(result.summary())
+    if result.new:
+        typer.echo("Next: `autotailor runway resolve` finds each new role's posting on the employer's site.")
+
+
+@mail_app.command("import")
+def mail_import(
+    files: list[Path] = typer.Argument(None, help=".eml files. Default: everything in data/inbox/."),
+) -> None:
+    """Import Runway emails saved as .eml files (the drop folder, or files you name).
+
+    In Gmail: open the email, "⋮" > "Download message", and save it into data/inbox/.
+    Files from the drop folder move to data/inbox/done/ once imported.
+    """
+    from autotailor import mail
+
+    settings = _settings()
+    paths = get_paths()
+    conn = db.connect(paths.db)
+    try:
+        if files:
+            total = mail.MailResult()
+            for f in files:
+                total.add(mail.import_file(conn, f, settings))
+        else:
+            paths.inbox.mkdir(parents=True, exist_ok=True)
+            total = mail.import_folder(conn, paths.inbox, settings)
+            if not total.messages and not total.ignored:
+                typer.echo(f"No .eml files in {paths.inbox}.")
+                return
+    finally:
+        conn.close()
+    _mail_summary(total)
+
+
+@mail_app.command("pull")
+def mail_pull(days: int = typer.Option(None, "--days", help="Look back this many days (default mail.imap_days).")) -> None:
+    """Pull Runway emails from a Gmail label over IMAP (read-only; nothing is marked read).
+
+    Setup: a Gmail filter that labels Runway mail, an app password
+    (Google Account > Security > App passwords), then
+    `autotailor config set mail.imap true`, `config set mail.imap_user you@gmail.com`,
+    `config set mail.imap_label Runway`, and `autotailor mail login`.
+    """
+    from autotailor import mail
+
+    settings = _settings()
+    paths = get_paths()
+    m = settings.mail
+    if not m.imap_user:
+        _fail("Set mail.imap_user first: autotailor config set mail.imap_user you@gmail.com")
+    password = mail.imap_password(paths.env)
+    if not password:
+        _fail(f"No IMAP app password. Run `autotailor mail login`, or put {mail.IMAP_PASSWORD_ENV}=... in .env.")
+    typer.echo(f"Checking '{m.imap_label}' for {mail.mask(m.imap_user)} on {m.imap_host} ...", err=True)
+    try:
+        raws = mail.fetch_imap(m, password, days or m.imap_days)
+    except Exception as e:  # imaplib.IMAP4.error, socket errors, missing label
+        _fail(f"IMAP failed: {e}")
+        return
+    conn = db.connect(paths.db)
+    total = mail.MailResult()
+    for raw in raws:
+        total.add(mail.import_raw(conn, raw, "imap", settings))
+    conn.close()
+    _mail_summary(total)
+
+
+@mail_app.command("login")
+def mail_login() -> None:
+    """Store the IMAP app password in the OS keyring (or explain the .env fallback)."""
+    from autotailor import mail
+
+    password = typer.prompt("Gmail app password", hide_input=True)
+    try:
+        mail.store_password_in_keyring(password)
+    except Exception as e:  # no keyring backend (WSL, headless Linux)
+        _fail(
+            f"No usable OS keyring here ({type(e).__name__}). Put this line in .env instead "
+            f"(it is git-ignored):\n  {mail.IMAP_PASSWORD_ENV}=<the app password>"
+        )
+    typer.echo("Saved in the OS keyring.")
+
+
+@mail_app.command("listen")
+def mail_listen(port: int = typer.Option(None, "--port", "-p", help="Default mail.smtp_port.")) -> None:
+    """Run a mail server on 127.0.0.1 that accepts forwarded Runway emails.
+
+    In a desktop mail client (Thunderbird, Outlook), add an outgoing server
+    127.0.0.1:<port>, no authentication, and forward Runway emails through it to
+    any address (e.g. inbox@autotailor.local). Only Runway emails are accepted.
+    """
+    import threading
+
+    from autotailor import mail
+
+    settings = _settings()
+    paths = get_paths()
+    port = port or settings.mail.smtp_port
+    lock = threading.Lock()
+
+    def on_saved(path: Path) -> None:
+        with lock:
+            conn = db.connect(paths.db)
+            try:
+                result = mail.import_file(conn, path, settings, origin="smtp")
+            finally:
+                conn.close()
+            done = paths.inbox / "done"
+            done.mkdir(parents=True, exist_ok=True)
+            path.rename(done / path.name)
+            typer.echo(f"Received: {result.summary()}")
+
+    controller = mail.smtp_controller(paths.inbox, settings.mail.allowed_senders, port, on_saved)
+    controller.start()
+    typer.echo(f"Listening on 127.0.0.1:{port} for forwarded Runway emails. Ctrl-C to stop.")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        controller.stop()
+
+
+@runway_app.command("list")
+def runway_list(status: str = typer.Option(None, "--status", "-s", help="open, resolved or skipped.")) -> None:
+    """Runway roles from your emails, and whether each has been matched to the employer's posting."""
+    conn = db.connect(get_paths().db)
+    rows = db.list_runway_roles(conn, status)
+    conn.close()
+    if not rows:
+        typer.echo("No Runway roles yet. Save a Runway email into data/inbox/ and run `autotailor mail import`.")
+        return
+    colors = {"open": typer.colors.YELLOW, "resolved": typer.colors.GREEN, "skipped": None}
+    for r in rows:
+        score = f"{r['match_score']:.0%}" if r["match_score"] is not None else "  -"
+        st = typer.style(f"{r['status']:<8}", fg=colors.get(r["status"]))
+        typer.echo(f"{st} {score:>4}  {r['company']} | {r['title']}  -> {r['posting_id'] or '-'}")
+
+
+def _ask_in_terminal(question: dict) -> dict | None:
+    """Show a resolve question; return an answer, or None to leave it for later."""
+    typer.echo("")
+    typer.secho(f"{question['company']} | {question['title']}" + (f" ({question['location']})" if question.get("location") else ""), bold=True)
+    if question.get("runway_url"):
+        typer.echo(f"  Runway: {question['runway_url']}")
+    if question.get("error"):
+        typer.secho(f"  {question['error']}", fg=typer.colors.RED)
+    typer.echo("  Paste the employer's posting URL, 'f <file>' for a file with the posting text, "
+               "'s' to skip this role, or Enter to leave it for later.")  # fmt: skip
+    reply = typer.prompt("  ", default="", show_default=False).strip()
+    if not reply:
+        return None
+    if reply.lower() in ("s", "skip"):
+        return {"skip": True}
+    if reply.lower().startswith("f "):
+        path = Path(reply[2:].strip()).expanduser()
+        try:
+            return {"text": path.read_text(encoding="utf-8")}
+        except OSError as e:
+            typer.secho(f"  Can't read {path}: {e}", fg=typer.colors.RED)
+            return _ask_in_terminal(question)
+    return {"url": reply}
+
+
+@runway_app.command("resolve")
+def runway_resolve(
+    auto: bool = typer.Option(False, "--auto", help="Only match automatically; leave the rest waiting, don't ask."),
+) -> None:
+    """Find each open Runway role's posting on the employer's site.
+
+    Tries the company's job board first. Roles it can't find wait for you:
+    without --auto you are asked now; otherwise answer later here or in the UI
+    (`autotailor ui`, Runway page). Answers are kept across restarts.
+    """
+    from autotailor import batch, resolve
+    from autotailor.chains.resolve_graph import build_resolve_graph, run_resolve
+    from autotailor.sources import make_client
+
+    settings = _settings()
+    paths = get_paths()
+    conn = db.connect(paths.db)
+    pending = resolve.open_roles(conn)
+    if not pending:
+        conn.close()
+        typer.echo("No open Runway roles.")
+        return
+    counts = {"resolved": 0, "skipped": 0, "waiting": 0}
+    with batch.open_checkpointer(paths.checkpoints) as saver, make_client() as client:
+        resolver = resolve.Resolver(conn, client, settings)
+        try:
+            graph = build_resolve_graph(resolver, saver)
+        except NotImplementedError:
+            graph = None
+            typer.secho("The resolve graph is not written yet (M7 exercise in src/autotailor/chains/resolve_graph.py): "
+                        "matching automatically only, no questions.", fg=typer.colors.YELLOW, err=True)  # fmt: skip
+        typer.echo(f"Resolving {len(pending)} Runway roles ...", err=True)
+        for pid in pending:
+            p = db.get_posting(conn, pid)
+            label = f"{p.company} | {p.title}" if p else pid
+            if graph is None or p is None or p.description:
+                # No graph yet, or already filled in (e.g. a later board fetch merged into it).
+                ok = resolver.auto_match(pid)
+                counts["resolved" if ok else "waiting"] += 1
+                continue
+            out = run_resolve(graph, pid)
+            while out.status == "waiting" and not auto:
+                answer = _ask_in_terminal(out.question)
+                if answer is None:
+                    break
+                out = run_resolve(graph, pid, answer)
+            counts[out.status] += 1
+            if out.status == "resolved":
+                typer.secho(f"  found: {label}", fg=typer.colors.GREEN, err=True)
+    conn.close()
+    typer.echo(f"{counts['resolved']} resolved, {counts['skipped']} skipped, {counts['waiting']} waiting for a link.")
+    if counts["waiting"]:
+        typer.echo("Answer the waiting ones with `autotailor runway resolve`, or on the Runway page of `autotailor ui`.")
+
+
 # --- tailoring (M4) ---------------------------------------------------------
 
 
@@ -848,7 +1076,7 @@ def run_all(
         False, "--ignore-limits", help="Run even if run.max_runs_per_day/week is reached."
     ),
 ) -> None:
-    """The whole pipeline: fetch, screen, rank, then tailor the top X.
+    """The whole pipeline: Runway mail, fetch, screen, rank, then tailor the top X.
 
     Stops early if a step has nothing to pass on.
     """
@@ -864,6 +1092,17 @@ def run_all(
     def step(title: str) -> None:
         typer.secho(f"\n== {title}", bold=True)
 
+    m = settings.mail
+    if settings.sources.runway_email and (m.drop_folder or m.imap):
+        step("Runway mail")
+        if m.drop_folder:
+            mail_import(files=None)
+        if m.imap:
+            try:
+                mail_pull(days=None)
+            except typer.Exit:
+                typer.secho("IMAP pull failed; continuing.", fg=typer.colors.YELLOW, err=True)
+
     if skip_fetch:
         pass
     elif not settings.sources.ats_boards or not _configured_boards(settings):
@@ -875,12 +1114,43 @@ def run_all(
         except typer.Exit as e:
             if e.exit_code:
                 typer.secho("Every board failed; continuing with stored postings.", fg=typer.colors.YELLOW, err=True)
+    conn = db.connect(get_paths().db)
+    open_runway = db.list_runway_roles(conn, "open")
+    conn.close()
+    if open_runway:
+        step("Runway roles")
+        runway_resolve(auto=True)
     step("Screen")
     screen(posting_ids=None, rejudge=False, reextract=False, limit=50)
     step("Rank")
     rank(rescore=False, show=None)
     step("Tailor")
     tailor(posting_ids=None, force=False, ignore_limits=True)
+
+
+@app.command()
+def ui(port: int = typer.Option(8501, "--port", "-p", help="Port on 127.0.0.1.")) -> None:
+    """Open the local web UI: settings, master CV editor, run history.
+
+    It listens on 127.0.0.1 only, so other machines can't reach it, and
+    Streamlit's usage statistics are switched off.
+    """
+    import subprocess
+
+    app_path = resources.files("autotailor.ui") / "app.py"
+    url = f"http://127.0.0.1:{port}"
+    typer.echo(f"AutoTailor UI: {url}  (Ctrl-C to stop)")
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", str(app_path),
+        "--server.address", "127.0.0.1", "--server.port", str(port), "--server.headless", "true",
+        "--browser.gatherUsageStats", "false", "--browser.serverAddress", "127.0.0.1",
+        "--client.toolbarMode", "minimal", "--global.showWarningOnDirectExecution", "false",
+    ]  # fmt: skip
+    env = {**os.environ, "AUTOTAILOR_HOME": str(get_paths().home)}
+    try:
+        raise typer.Exit(subprocess.call(cmd, env=env))
+    except KeyboardInterrupt:
+        raise typer.Exit(0) from None
 
 
 if __name__ == "__main__":

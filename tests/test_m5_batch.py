@@ -232,7 +232,11 @@ def test_cli_run_limit(home, monkeypatch):
     assert runner.invoke(app, ["tailor", "--force", "--ignore-limits"]).exit_code == 0
 
 
-def test_cli_without_batch_graph_runs_one_at_a_time(home):
+def test_cli_without_batch_graph_runs_one_at_a_time(home, monkeypatch):
+    def unwritten(*a, **k):
+        raise NotImplementedError("M5 exercise: implement build_batch_graph()")
+
+    monkeypatch.setattr("autotailor.chains.batch_graph.build_batch_graph", unwritten)
     r = CliRunner().invoke(app, ["tailor"])
     assert r.exit_code == 0, r.output
     assert "batch graph is not written yet" in r.output and "1 tailored, 1 failed" in r.output
