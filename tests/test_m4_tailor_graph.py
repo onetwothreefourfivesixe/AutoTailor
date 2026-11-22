@@ -104,3 +104,14 @@ def test_live_tailors_sample_posting():
     ids = [b.source_id for b in result.resume.bullets]
     assert "exp-lab-detector" in ids
     assert "proj-budget" not in ids, "the budgeting app is irrelevant to a perception internship"
+
+
+@pytest.mark.xfail(reason="M10 exercise: keep a history of every draft (see the end of tailor_graph.py)", strict=False)
+def test_history_keeps_every_draft():
+    bad = TailoredResume(bullets=[TailoredBullet(source_id="ghost", text="Invented")], skills=[])
+    model = ScriptedModel(bad, GOOD)
+    final = _run(model)
+    history = final["history"]
+    assert [h["attempt"] for h in history] == [1, 2]
+    assert history[0]["bullets"] == ["ghost"] and history[0]["errors"]
+    assert history[1]["errors"] == [] and history[1]["bullets"] == [b.source_id for b in GOOD.bullets]

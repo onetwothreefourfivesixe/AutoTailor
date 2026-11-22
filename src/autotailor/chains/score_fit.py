@@ -98,7 +98,7 @@ def build_chain(llm: BaseChatModel, profile: str) -> Runnable:
 
 
 def score_fit_batch(
-    postings: list[str], profile: str, settings: Settings, max_concurrency: int = 4
+    postings: list[str], profile: str, settings: Settings, max_concurrency: int = 4, ids: list[str] | None = None
 ) -> list[FitAssessment | Exception]:
     """Score many postings against one profile, concurrently. Given.
 
@@ -106,8 +106,9 @@ def score_fit_batch(
     """
     llm = get_chat_model(settings, "score")
     chain = build_chain(llm, profile)
+    n = len(postings)  # `ids` (posting IDs) label each call in the AI log
     return chain.batch(
         [{"posting": p} for p in postings],
-        config={"max_concurrency": max_concurrency},
+        config=[{"max_concurrency": max_concurrency, "metadata": {"item": i}} for i in (ids or [None] * n)],
         return_exceptions=True,
     )

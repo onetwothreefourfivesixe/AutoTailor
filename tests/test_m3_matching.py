@@ -228,7 +228,7 @@ def test_cli_rank_and_shortlist(home, monkeypatch):
 
     scored: list[str] = []
 
-    def fake_score(postings, profile, settings, max_concurrency=4):
+    def fake_score(postings, profile, settings, max_concurrency=4, ids=None):
         assert "[exp-acme-intern-api]" in profile
         scored.extend(postings)
         return [

@@ -30,6 +30,8 @@ mail_app = typer.Typer(no_args_is_help=True, help="Bring in Runway notification 
 runway_app = typer.Typer(no_args_is_help=True, help="Runway roles: list them, find their employer postings.")
 app.add_typer(mail_app, name="mail")
 app.add_typer(runway_app, name="runway")
+answers_app = typer.Typer(no_args_is_help=True, help="Short-answer questions: suggested points, opt-in drafts.")
+app.add_typer(answers_app, name="answers")
 
 
 def _fail(message: str) -> None:
@@ -449,6 +451,7 @@ def screen(
                 [p.description or "" for p in to_read],
                 settings,
                 max_concurrency=1 if spec.is_local else 4,
+                ids=[p.id for p in to_read],
             )
         except NotImplementedError:
             skipped = 0  # nothing can be read until the chain exists
@@ -573,6 +576,7 @@ def rank(
                 matching.profile_text(cv, settings.profile),
                 settings,
                 max_concurrency=1 if score_spec.is_local else 4,
+                ids=[p.id for p in to_score],
             )
         except NotImplementedError:
             typer.secho(
@@ -832,7 +836,13 @@ def runway_resolve(
             typer.secho("The resolve graph is not written yet (M7 exercise in src/autotailor/chains/resolve_graph.py): "
                         "matching automatically only, no questions.", fg=typer.colors.YELLOW, err=True)  # fmt: skip
         typer.echo(f"Resolving {len(pending)} Runway roles ...", err=True)
-        for pid in pending:
+        from autotailor.tasks import report_progress
+
+        from autotailor.ailog import current_item
+
+        for i, pid in enumerate(pending):
+            report_progress(i, len(pending), f"{i} of {len(pending)} roles checked")
+            current_item.set(pid)
             p = db.get_posting(conn, pid)
             label = f"{p.company} | {p.title}" if p else pid
             if graph is None or p is None or p.description:
@@ -853,6 +863,376 @@ def runway_resolve(
     typer.echo(f"{counts['resolved']} resolved, {counts['skipped']} skipped, {counts['waiting']} waiting for a link.")
     if counts["waiting"]:
         typer.echo("Answer the waiting ones with `autotailor runway resolve`, or on the Runway page of `autotailor ui`.")
+
+
+# --- short answers (M8) ------------------------------------------------------
+
+
+@answers_app.command("add")
+def answers_add(
+    posting_id: str = typer.Argument(..., help="The posting the questions belong to (see `jobs list`)."),
+    question: str = typer.Argument(None, help="The question, with its limit if any, e.g. 'Why us? (150 words)'."),
+    file: Path = typer.Option(None, "--file", "-f", help="Several questions, separated by blank lines."),
+    words: int = typer.Option(None, "--words", "-w", help="Word limit, if the question text doesn't say."),
+) -> None:
+    """Add short-answer questions from an application."""
+    from autotailor.answers import parse_question, split_questions
+
+    texts = split_questions(file.read_text(encoding="utf-8")) if file else ([question] if question else [])
+    if not texts:
+        _fail("Give a question, or --file with questions separated by blank lines.")
+    conn = db.connect(get_paths().db)
+    if db.get_posting(conn, posting_id) is None:
+        conn.close()
+        _fail(f"No posting {posting_id}. See `autotailor jobs list`.")
+    for t in texts:
+        text, limit = parse_question(t)
+        qid = db.add_question(conn, posting_id, text, words or limit)
+        typer.echo(f"{qid:>4}  {text}" + (f"  [{words or limit} words]" if words or limit else ""))
+    conn.close()
+    typer.echo("Next: `autotailor answers run` suggests points for each, and drafts the ones you choose.")
+
+
+@answers_app.command("list")
+def answers_list(posting_id: str = typer.Argument(None, help="Only this posting.")) -> None:
+    """Questions and where each one stands."""
+    conn = db.connect(get_paths().db)
+    rows = db.list_questions(conn, posting_id)
+    if not rows:
+        conn.close()
+        typer.echo("No questions yet. Add one with `autotailor answers add <posting id> \"...\"`.")
+        return
+    current = None
+    for q in rows:
+        if q["posting_id"] != current:
+            current = q["posting_id"]
+            p = db.get_posting(conn, current)
+            typer.secho(f"\n{p.company} | {p.title}" if p else f"\n{current}", bold=True)
+        typer.echo(f"{q['id']:>4}  {q['status']:<12} {q['text'][:90]}")
+    conn.close()
+
+
+def _choose_in_terminal(payload: dict) -> dict:
+    """Show the suggested points; ask whether to draft, which points, and any notes."""
+    typer.echo("")
+    typer.secho(f"{payload['company']} | {payload['title']}", bold=True)
+    limit = f"  ({payload['word_limit']} words)" if payload.get("word_limit") else ""
+    typer.secho(f"Q: {payload['question']}{limit}", fg=typer.colors.CYAN)
+    typer.echo("Points to draw on:")
+    for i, pt in enumerate(payload["points"], 1):
+        typer.echo(f"  {i}. {pt['point']}  [{pt['source_id']}]")
+        typer.echo(typer.style(f"     why: {pt['why']}", dim=True))
+    if not typer.confirm("Draft an answer from these?", default=False):
+        return {"draft": False}
+    raw = typer.prompt("Which points (e.g. 1,3; Enter for all)", default="", show_default=False)
+    use = [int(x) for x in raw.replace(" ", "").split(",") if x.isdigit() and 1 <= int(x) <= len(payload["points"])]
+    notes = typer.prompt("Anything to add or stress (Enter to skip)", default="", show_default=False)
+    return {"draft": True, "use": use or None, "notes": notes}
+
+
+@answers_app.command("run")
+def answers_run(
+    question_ids: list[int] = typer.Argument(None, help="Only these questions. Default: all not yet done."),
+    posting: str = typer.Option(None, "--posting", "-p", help="Only this posting's questions."),
+    redo: bool = typer.Option(False, "--redo", help="Start the named questions over (new points, new draft)."),
+    no_ask: bool = typer.Option(False, "--no-ask", help="Only suggest points; decide later (UI or another run)."),
+) -> None:
+    """Suggest points for each question; draft and humanize the ones you opt in to.
+
+    Drafts are checked against your CV (no new numbers or names), the word
+    limit, and stock AI phrasing. Results go to data/outputs/answers/.
+    """
+    from autotailor import batch
+    from autotailor.answers import AnswerTools, save_outcome, write_answers
+    from autotailor.chains.answer_graph import build_answer_graph, run_answer, thread_id
+
+    settings = _settings()
+    paths = get_paths()
+    cv = _load_cv_or_fail()
+    conn = db.connect(paths.db)
+    rows = [db.get_question(conn, i) for i in question_ids] if question_ids else db.list_questions(conn, posting)
+    rows = [r for r in rows if r is not None and (redo or question_ids or r["status"] in ("new", "waiting"))]
+    if posting:
+        rows = [r for r in rows if r["posting_id"] == posting]
+    if not rows:
+        conn.close()
+        typer.echo("No questions to work on. `autotailor answers list` shows them all.")
+        return
+    tools = AnswerTools(conn, cv, settings)
+    spec = settings.models.for_step("tailor")
+    model = f"{spec.provider}:{spec.model}"
+    touched: set[str] = set()
+    with batch.open_checkpointer(paths.checkpoints) as saver:
+        try:
+            from autotailor.llm import get_chat_model
+
+            graph = build_answer_graph(tools, get_chat_model(settings, "tailor"), get_chat_model(settings, "humanize"),
+                                       saver, settings.tailor.max_attempts)  # fmt: skip
+        except NotImplementedError:
+            graph = None
+            typer.secho("The answer graph is not written yet (M8 exercise in src/autotailor/chains/answer_graph.py): "
+                        "suggesting points only, no drafts.", fg=typer.colors.YELLOW, err=True)  # fmt: skip
+        for q in rows:
+            qid = q["id"]
+            touched.add(q["posting_id"])
+            from autotailor.ailog import current_item
+
+            current_item.set(f"question:{qid}")  # labels this question's model calls in the AI log
+            if redo:
+                saver.delete_thread(thread_id(qid))
+            try:
+                if graph is None:
+                    points = tools.suggest(qid)
+                    db.update_question(conn, qid, status="points", points=points)
+                    typer.echo(f"{qid}: {len(points)} points suggested.")
+                    continue
+                out = run_answer(graph, qid)
+                if out.status == "waiting" and no_ask:
+                    save_outcome(conn, qid, out, model)
+                    typer.echo(f"{qid}: {len(out.payload['points'])} points suggested; waiting for your decision.")
+                    continue
+                if out.status == "waiting":
+                    save_outcome(conn, qid, out, model)
+                    decision = _choose_in_terminal(out.payload)
+                    if decision["draft"]:
+                        typer.echo("Drafting and humanizing ...", err=True)
+                    out = run_answer(graph, qid, decision)
+            except Exception as e:  # model errors, missing keys
+                # A thread that crashed part way has neither a question nor an outcome; start it over next time.
+                saver.delete_thread(thread_id(qid))
+                db.update_question(conn, qid, status="new")
+                typer.secho(f"{qid}: failed: {type(e).__name__}: {e}", fg=typer.colors.RED, err=True)
+                continue
+            save_outcome(conn, qid, out, model)
+            if out.status in ("drafted", "needs_review"):
+                typer.echo("")
+                typer.echo(out.payload["text"])
+                if out.payload["problems"]:
+                    typer.secho("Still to fix by hand:", fg=typer.colors.YELLOW)
+                    for x in out.payload["problems"]:
+                        typer.secho(f"  - {x}", fg=typer.colors.YELLOW)
+    for pid in touched:
+        path = write_answers(conn, pid, paths.outputs)
+        typer.echo(f"\nSaved: {path}")
+    conn.close()
+
+
+@answers_app.command("decide")
+def answers_decide(
+    question_id: int = typer.Argument(...),
+    draft: bool = typer.Option(True, "--draft/--points-only", help="Draft an answer, or keep the suggested points."),
+    use: str = typer.Option("", "--use", help="Point numbers to draft from, e.g. 1,3 (default: all)."),
+    notes: str = typer.Option("", "--notes", help="Anything to add or stress."),
+) -> None:
+    """Answer a waiting question's opt-in without prompts (used by the UI and the API)."""
+    from autotailor import batch
+    from autotailor.ailog import current_item
+    from autotailor.answers import AnswerTools, save_outcome, write_answers
+    from autotailor.chains.answer_graph import build_answer_graph, run_answer
+    from autotailor.llm import get_chat_model
+
+    settings = _settings()
+    paths = get_paths()
+    cv = _load_cv_or_fail()
+    conn = db.connect(paths.db)
+    q = db.get_question(conn, question_id)
+    if q is None:
+        conn.close()
+        _fail(f"No question {question_id}.")
+    spec = settings.models.for_step("tailor")
+    model = f"{spec.provider}:{spec.model}"
+    current_item.set(f"question:{question_id}")
+    with batch.open_checkpointer(paths.checkpoints) as saver:
+        graph = build_answer_graph(AnswerTools(conn, cv, settings), get_chat_model(settings, "tailor"),
+                                   get_chat_model(settings, "humanize"), saver, settings.tailor.max_attempts)  # fmt: skip
+        out = run_answer(graph, question_id)
+        if out.status != "waiting":
+            conn.close()
+            _fail(f"Question {question_id} isn't waiting for a decision (it is {out.status}).")
+        nums = [int(x) for x in use.replace(" ", "").split(",") if x.isdigit()]
+        decision = {"draft": draft, "use": nums or None, "notes": notes}
+        if draft:
+            typer.echo("Drafting and humanizing ...", err=True)
+        out = run_answer(graph, question_id, decision)
+    save_outcome(conn, question_id, out, model)
+    path = write_answers(conn, q["posting_id"], paths.outputs)
+    conn.close()
+    if out.status in ("drafted", "needs_review"):
+        typer.echo(out.payload["text"])
+        for x in out.payload["problems"]:
+            typer.secho(f"  - {x}", fg=typer.colors.YELLOW)
+    typer.echo(f"{out.status}. Saved: {path}")
+
+
+@runway_app.command("answer")
+def runway_answer(
+    posting_id: str = typer.Argument(..., help="The Runway role's posting ID (see `runway list`)."),
+    url: str = typer.Option(None, "--url", help="The employer's posting URL."),
+    text: str = typer.Option(None, "--text", help="The posting text."),
+    skip: bool = typer.Option(False, "--skip", help="Drop this role."),
+) -> None:
+    """Answer a waiting Runway role without prompts (used by the UI and the API)."""
+    from autotailor import batch, resolve
+    from autotailor.ailog import current_item
+    from autotailor.chains.resolve_graph import build_resolve_graph, run_resolve
+    from autotailor.sources import make_client
+
+    if sum(bool(x) for x in (url, text, skip)) != 1:
+        _fail("Give exactly one of --url, --text or --skip.")
+    answer = {"skip": True} if skip else {"url": url} if url else {"text": text}
+    settings = _settings()
+    paths = get_paths()
+    conn = db.connect(paths.db)
+    current_item.set(posting_id)
+    with batch.open_checkpointer(paths.checkpoints) as saver, make_client() as client:
+        graph = build_resolve_graph(resolve.Resolver(conn, client, settings), saver)
+        out = run_resolve(graph, posting_id)
+        if out.status == "waiting":
+            out = run_resolve(graph, posting_id, answer)
+    conn.close()
+    if out.status == "waiting":
+        _fail(out.question.get("error") or "Still not found.")
+    typer.echo(f"{posting_id}: {out.status}.")
+
+
+@answers_app.command("show")
+def answers_show(posting_id: str = typer.Argument(..., help="Posting whose questions to show.")) -> None:
+    """Print a posting's questions with their points and drafts."""
+    from autotailor.answers import answers_markdown
+
+    conn = db.connect(get_paths().db)
+    typer.echo(answers_markdown(conn, posting_id))
+    conn.close()
+
+
+@answers_app.command("remove")
+def answers_remove(question_id: int = typer.Argument(...)) -> None:
+    """Delete a question."""
+    conn = db.connect(get_paths().db)
+    db.delete_question(conn, question_id)
+    conn.close()
+    typer.echo(f"Removed question {question_id}.")
+
+
+# --- models and comparisons (M9) ------------------------------------------------
+
+
+@app.command("models")
+def models_cmd() -> None:
+    """Which model each step uses, and which Ollama models are pulled (with sizes)."""
+    settings = _settings()
+    m = settings.models
+    used: dict[str, list[str]] = {}
+    for step in STEPS:
+        spec = m.for_step(step)
+        used.setdefault(f"{spec.provider}:{spec.model}", []).append(step)
+    used.setdefault(f"{m.embeddings.provider}:{m.embeddings.model}", []).append("embeddings")
+    try:
+        tags = httpx.get(f"{m.ollama_base_url.rstrip('/')}/api/tags", timeout=5).json()["models"]
+    except (httpx.HTTPError, KeyError, ValueError):
+        tags = None
+    pulled = {t["name"]: t for t in tags or []}
+    pulled.update({k.removesuffix(":latest"): v for k, v in list(pulled.items())})
+    typer.secho("In use:", bold=True)
+    for name, steps in used.items():
+        provider, _, model = name.partition(":")
+        if provider == "ollama":
+            t = pulled.get(model)
+            state = (f"pulled, {t['size'] / 1e9:.1f} GB" if t else typer.style(f"NOT PULLED: ollama pull {model}", fg=typer.colors.RED)) \
+                if tags is not None else "Ollama not reachable"
+        else:
+            state = typer.style("cloud: sends data off this machine", fg=typer.colors.YELLOW)
+        typer.echo(f"  {name:<40} {', '.join(steps):<28} {state}")
+    if tags:
+        typer.secho("Pulled in Ollama:", bold=True)
+        for t in tags:
+            d = t.get("details", {})
+            typer.echo(f"  {t['name']:<40} {t['size'] / 1e9:5.1f} GB  {d.get('parameter_size', '')} {d.get('quantization_level', '')}")
+
+
+def _compare_items(conn, settings: Settings, step: str, ids: list[str] | None, n: int):  # noqa: ANN202, ANN001
+    from autotailor import matching
+
+    if step == "answers":
+        if ids:
+            return [int(i) for i in ids]
+        qs = [q for q in db.list_questions(conn) if q["points_json"] or q["answer"]]
+        return [q["id"] for q in qs][:n]
+    if ids:
+        return [p for i in ids if (p := db.get_posting(conn, i)) and p.description]
+    if step == "tailor":
+        tailored = {a["posting_id"] for r in db.list_runs(conn, None) for a in db.run_artifacts(conn, r["id"])}
+        rows = [p for p, _ in matching.ranked(conn, settings) if p.id in tailored] or [p for p, _ in matching.shortlist(conn, settings)]
+        return rows[:n]
+    if step == "score":
+        return [p for p, m in matching.ranked(conn, settings) if m.fit_score is not None][:n]
+    with_reqs = [p for p in db.list_postings(conn, None) if p.description and p.requirements is not None]
+    return (with_reqs or [p for p in db.list_postings(conn, None) if p.description])[:n]
+
+
+@app.command()
+def compare(
+    step: str = typer.Argument(..., help="extract, score, tailor or answers."),
+    model: list[str] = typer.Option(None, "--model", "-m", help="provider:model, e.g. ollama:gemma4:12b. Repeatable."),
+    current: bool = typer.Option(True, "--current/--no-current", help="Include the model the step uses now."),
+    n: int = typer.Option(5, "--n", "-n", min=1, help="How many postings (or questions) to try."),
+    ids: list[str] = typer.Option(None, "--id", help="Specific posting (or question) IDs. Repeatable."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before sending data to a cloud model."),
+) -> None:
+    """Rerun one step on saved postings with several models, side by side. Nothing stored changes.
+
+    Example: autotailor compare tailor -m ollama:gemma4:12b -n 3
+    Writes a report to data/comparisons/ (also on the Compare page of `autotailor ui`).
+    """
+    from datetime import datetime
+
+    from autotailor import compare as cmp
+
+    if step not in ("extract", "score", "tailor", "answers"):
+        _fail("Step must be one of: extract, score, tailor, answers.")
+    settings = _settings()
+    paths = get_paths()
+    base = settings.models.for_step(cmp.STEP_OF[step])
+    try:
+        specs = ([base] if current else []) + [cmp.parse_model(x, base) for x in model or []]
+    except ValueError as e:
+        _fail(str(e))
+        return
+    specs = list({cmp.label(s): s for s in specs}.values())
+    if len(specs) < 2:
+        _fail("Name at least one other model to compare with, e.g. -m ollama:gemma4:12b.")
+    if missing := cmp.missing_ollama_models(specs, settings.models.ollama_base_url):
+        _fail("Not pulled in Ollama: " + ", ".join(missing) + "\n" + "\n".join(f"  ollama pull {x}" for x in missing))
+    cloud = [cmp.label(s) for s in specs if not s.is_local]
+    if cloud and not yes and not typer.confirm(f"{', '.join(cloud)} will receive posting and CV text. Continue?"):
+        raise typer.Exit(1)
+
+    cv = _load_cv_or_fail()
+    conn = db.connect(paths.db)
+    items = _compare_items(conn, settings, step, ids, n)
+    if not items:
+        conn.close()
+        _fail({"tailor": "No tailored or shortlisted postings yet: run `autotailor rank` first.",
+               "score": "No fit-scored postings yet: run `autotailor rank` first.",
+               "answers": "No questions with points yet: `autotailor answers add` and `answers run`.",
+               "extract": "No postings with a description yet."}[step])  # fmt: skip
+    typer.echo(f"Comparing {step} on {len(items)} item(s) with: {', '.join(cmp.label(s) for s in specs)} ...", err=True)
+    started = datetime.now()
+    try:
+        if step == "extract":
+            trials = cmp.compare_extract(conn, settings, specs, items)
+        elif step == "score":
+            trials = cmp.compare_score(conn, cv, settings, specs, items)
+        elif step == "tailor":
+            trials = cmp.compare_tailor(conn, cv, settings, specs, items, paths.outputs)
+        else:
+            trials = cmp.compare_answers(conn, cv, settings, specs, items)
+    finally:
+        conn.close()
+    for row in cmp.summarize(step, trials):  # type: ignore[arg-type]
+        typer.echo("  " + "  ".join(f"{k.replace('_', ' ')}: {v}" for k, v in row.items() if v is not None))
+    path = cmp.write_report(paths.comparisons, step, trials, started)  # type: ignore[arg-type]
+    typer.echo(f"Report: {path}")
 
 
 # --- tailoring (M4) ---------------------------------------------------------
@@ -888,6 +1268,7 @@ def _execute_run(conn, settings: Settings, cv, run_id: int, jobs: list | None) -
     import threading
 
     from autotailor import batch
+    from autotailor import tasks as tasks_mod
     from autotailor.chains.batch_graph import build_batch_graph, run_batch
 
     paths = get_paths()
@@ -900,6 +1281,17 @@ def _execute_run(conn, settings: Settings, cv, run_id: int, jobs: list | None) -
             db.finish_run(conn, run_id, "failed", {})
             _fail(f"Run {run_id} has nothing saved to resume from. Start a new one with `autotailor tailor`.")
         work = batch.make_worker(cv, settings, cancel)
+        if tasks_mod.current_task_id() is not None:  # running as a UI task: report each finished job
+            total = len(jobs) if jobs is not None else None
+            finished = [0]
+            inner = work
+
+            def work(job, inner=inner):  # noqa: ANN001, ANN202
+                result = inner(job)
+                finished[0] += 1
+                tasks_mod.report_progress(finished[0], total, f"{finished[0]} resume(s) done")
+                return result
+
         try:
             graph = build_batch_graph(work, saver)
         except NotImplementedError:
@@ -956,6 +1348,8 @@ def _execute_run(conn, settings: Settings, cv, run_id: int, jobs: list | None) -
             n = r.result["attempts"]
             pages = "" if r.pages <= 1 else typer.style(f"  ({r.pages} pages: lower tailor.max_bullets?)", fg=typer.colors.YELLOW)
             typer.echo(f"{label}  ({n} draft{'s' if n != 1 else ''}){pages}")
+            if r.warning:
+                typer.secho(f"      {r.warning}", fg=typer.colors.YELLOW, err=True)
         else:
             typer.secho(f"{label}: no resume written: {r.result['message']}", fg=typer.colors.RED, err=True)
             for err in r.result["errors"][:5]:
@@ -1126,6 +1520,37 @@ def run_all(
     rank(rescore=False, show=None)
     step("Tailor")
     tailor(posting_ids=None, force=False, ignore_limits=True)
+
+
+@app.command()
+def api(
+    port: int = typer.Option(8765, "--port", "-p", help="Port on 127.0.0.1."),
+    cors: list[str] = typer.Option(None, "--cors", help="Allow a browser frontend at this origin, e.g. http://localhost:5173."),
+) -> None:
+    """Run the local HTTP API (for a custom frontend or a browser extension). Docs at /docs."""
+    import uvicorn
+
+    from autotailor.api import TOKEN_HEADER, api_token, create_app
+
+    paths = get_paths()
+    api_token(paths)  # created on first run
+    typer.echo(f"AutoTailor API: http://127.0.0.1:{port}  (docs: /docs)")
+    typer.echo(f"Send the header {TOKEN_HEADER} with the token in {paths.data / 'api_token'}.")
+    uvicorn.run(create_app(paths.home, cors or None), host="127.0.0.1", port=port, log_level="warning")
+
+
+@app.command()
+def worker(once: bool = typer.Option(False, "--once", help="Run what's queued, then exit.")) -> None:
+    """Run queued background tasks (the UI starts this automatically)."""
+    from autotailor import tasks
+
+    paths = get_paths()
+    paths.data.mkdir(parents=True, exist_ok=True)
+    tasks.pid_file(paths.data).write_text(str(os.getpid()))
+    try:
+        tasks.worker_loop(paths.home, once=once)
+    finally:
+        tasks.pid_file(paths.data).unlink(missing_ok=True)
 
 
 @app.command()

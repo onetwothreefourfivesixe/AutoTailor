@@ -52,7 +52,7 @@ def render() -> None:
     st.title("Settings")
     st.caption(f"Saved to `{paths().config}`. The CLI reads the same file.")
 
-    tabs = st.tabs(["Profile", "Eligibility", "Runs", "Job sources", "Models"])
+    tabs = st.tabs(["Profile", "Eligibility", "Runs", "Job sources", "Models", "AI log", "Resume template"])
 
     with tabs[0]:
         pr = data["profile"]
@@ -148,6 +148,25 @@ def render() -> None:
         st.markdown("**Embeddings** (pre-ranking postings)")
         md["embeddings"] = _model_fields("Embeddings", md["embeddings"], "emb", EMBED_PROVIDERS, chat=False)
 
+    with tabs[5]:
+        lg = data["log"]
+        st.caption("Every model call can be recorded locally (Postings page > AI log). Nothing here leaves this machine.")
+        lg["enabled"] = st.checkbox("Record model calls", lg["enabled"], key=_k("log.on"))
+        lg["keep_prompts"] = st.checkbox("Keep the prompts and responses (not just timing and status)",
+                                         lg["keep_prompts"], key=_k("log.text"))  # fmt: skip
+        lg["retention_days"] = st.number_input("Keep for (days)", 1, 365, lg["retention_days"], key=_k("log.days"))
+        from autotailor.ui.common import connection
+
+        with connection() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0]
+            if st.button(f"Clear the log ({n} calls)", key=_k("log.clear"), disabled=n == 0):
+                conn.execute("DELETE FROM llm_calls")
+                conn.commit()
+                st.rerun()
+
+    with tabs[6]:
+        data["resume"] = _resume_tab(data["resume"])
+
     st.divider()
     c1, c2, _ = st.columns([1, 1, 3])
     if c1.button("Save settings", type="primary"):
@@ -162,3 +181,72 @@ def render() -> None:
     if c2.button("Discard changes"):
         _reset()
         st.rerun()
+
+
+def _resume_tab(rs: dict[str, Any]) -> dict[str, Any]:
+    """Pick the resume template; upload your own LaTeX or Word template; preview with your CV."""
+    from autotailor.resume import latex
+    from autotailor.resume.render import BUILTIN_TEMPLATES
+
+    tdir = paths().templates
+    tdir.mkdir(parents=True, exist_ok=True)
+    tex = sorted(p.name for p in tdir.glob("*.tex")) + sorted(p.name for p in tdir.glob("*.tex.j2"))
+    docx = sorted(p.name for p in tdir.glob("*.docx"))
+    options = list(BUILTIN_TEMPLATES) + tex
+    names = {**BUILTIN_TEMPLATES, **{t: f"{t} (yours, LaTeX)" for t in tex}}
+    current = rs["template"] if rs["template"] in options else "jake"
+    rs["template"] = st.selectbox("PDF template", options, index=options.index(current),
+                                  format_func=lambda t: names[t], key=_k("res.tpl"))  # fmt: skip
+    word = [""] + docx
+    rs["word_template"] = st.selectbox(
+        "Word template", word, index=word.index(rs["word_template"]) if rs["word_template"] in word else 0,
+        format_func=lambda t: t or "Built-in Word layout", key=_k("res.word"),
+    )  # fmt: skip
+    if rs["template"] not in ("typst",):
+        st.caption("LaTeX templates compile with Tectonic, downloaded into data/tools/ on first use (about 10 MB, then "
+                   "the TeX packages it needs). No resume content leaves this machine.")  # fmt: skip
+
+    with st.expander("Use your own template"):
+        st.markdown(
+            "**LaTeX**: start from Jake's template and change the look. Values go in as `((( name )))`, "
+            "statements as `((* for s in sections *))`; all text is LaTeX-escaped for you, and `((( url|url )))` "
+            "is for links. Available: `name`, `contact_items` (`text`, `url`), `sections` (`title`, `items` with "
+            "`left1`, `right1`, `left2`, `right2`, `bullets`), `skills` (`name`, `items`).  \n"
+            "**Word**: a .docx using the same names in docxtpl syntax, e.g. `{{ name }}`, "
+            "`{%p for s in sections %}` ... `{%p endfor %}`."
+        )
+        st.download_button("Download Jake's template (.tex.j2)", latex.builtin("jake.tex.j2"), "jake.tex.j2", key=_k("res.dl"))
+        up = st.file_uploader("Upload a .tex, .tex.j2 or .docx template", type=["tex", "j2", "docx"], key=_k("res.up"))
+        if up is not None and st.button("Add template", key=_k("res.add")):
+            (tdir / up.name).write_bytes(up.getvalue())
+            st.success(f"Added {up.name}. Pick it above, then Save settings.")
+            st.rerun()
+
+    if st.button("Preview with my CV", key=_k("res.preview")):
+        _preview(rs["template"])
+    return rs
+
+
+def _preview(template: str) -> None:
+    from autotailor.cv import load_master_cv
+    from autotailor.models import TailoredBullet, TailoredResume
+    from autotailor.resume.layout import build_layout
+    from autotailor.resume.render import pdf_page_count, pdf_to_png, render_resume
+
+    try:
+        cv = load_master_cv(paths().master_cv)
+    except (OSError, ValueError) as e:
+        st.error(f"Can't read the master CV: {e}")
+        return
+    ids = [b.id for e in cv.entries() for b in e.bullets][:12]  # a typical one-page selection
+    sample = TailoredResume(bullets=[TailoredBullet(source_id=i, text=cv.bullets()[i].text) for i in ids])
+    with st.spinner("Rendering (the first LaTeX render also sets up Tectonic) ..."):
+        try:
+            r = render_resume(build_layout(sample, cv), template, paths().templates, paths().tools)
+        except Exception as e:  # LaTeX errors, missing files
+            st.error(str(e))
+            return
+    if r.warning:
+        st.warning(r.warning)
+    pages = pdf_page_count(r.pdf)
+    st.image(pdf_to_png(r.pdf), caption=f"{pages} page(s), 12 bullets from your CV")

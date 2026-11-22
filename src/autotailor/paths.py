@@ -42,6 +42,21 @@ class Paths:
         return self.data / "checkpoints.db"
 
     @property
+    def templates(self) -> Path:
+        """Your own resume templates (.tex, .docx)."""
+        return self.data / "templates"
+
+    @property
+    def tools(self) -> Path:
+        """Downloaded tools (Tectonic) and their caches."""
+        return self.data / "tools"
+
+    @property
+    def comparisons(self) -> Path:
+        """Model comparison reports (M9)."""
+        return self.data / "comparisons"
+
+    @property
     def cv_backups(self) -> Path:
         """Previous versions of the master CV, one per save from the UI."""
         return self.data / "cv_backups"

@@ -240,3 +240,21 @@ def test_cli_without_batch_graph_runs_one_at_a_time(home, monkeypatch):
     r = CliRunner().invoke(app, ["tailor"])
     assert r.exit_code == 0, r.output
     assert "batch graph is not written yet" in r.output and "1 tailored, 1 failed" in r.output
+
+
+def test_draft_history_is_saved_next_to_the_resume(home, monkeypatch):
+    """When the tailoring graph keeps a history (M10 exercise), every draft is saved as attempts.json."""
+    import json
+
+    history = [{"attempt": 1, "bullets": ["ghost"], "errors": ["Bullet 1: 'ghost' is not a bullet ID"]},
+               {"attempt": 2, "bullets": ["exp-lab-detector", "proj-ocr"], "errors": []}]  # fmt: skip
+
+    def with_history(posting, profile, cv, settings):
+        return TailorResult(_verbatim("exp-lab-detector", "proj-ocr"), [], 2, history)
+
+    monkeypatch.setattr("autotailor.chains.tailor_graph.tailor_posting", with_history)
+    LoopGraph().install(monkeypatch)
+    r = CliRunner().invoke(app, ["tailor", "lever:b"])
+    assert r.exit_code == 0, r.output
+    saved = next((home / "data" / "outputs").glob("*-run1/01-*/attempts.json"))
+    assert json.loads(saved.read_text()) == history

@@ -157,5 +157,44 @@
             "If there is feedback on a previous draft, fix every item it lists while following all the rules above."
         ],
         "human": "Use between {min_bullets} and {max_bullets} bullets.\n\nJob posting:\n{posting}\n\nCandidate profile:\n{profile}\n\nFeedback on your previous draft (fix every item):\n{feedback}"
+    },
+    "suggest_points": {
+        "system": [
+            "You help a student answer a short-answer question on a job application. You do not write the answer. You pick the experiences from their CV that would answer it best.",
+            "Each bullet in the candidate profile starts with its ID in [brackets]. For each point, set source_id to that ID copied exactly, without the brackets. Use only IDs that appear in the profile, and each at most once.",
+            "Write each point as one plain sentence saying what the candidate did and what it shows, using only facts the bullet states: no new numbers, tools, names or results.",
+            "Prefer experiences that answer the question directly, then ones that connect to what the posting asks for. Choose 2 to 5 points, most useful first.",
+            "In why, say in a few words how the point answers the question."
+        ],
+        "human": "Question: {question}\n\nRole: {title} at {company}\n\nJob posting:\n{posting}\n\nCandidate profile:\n{profile}"
+    },
+    "humanize": {
+        "system": [
+            "You edit a short answer a student wrote for a job application so it reads like a person wrote it, not a language model. Return only the edited answer, with no preamble or notes.",
+            "Keep every fact exactly as it is. Do not add facts, numbers, names, tools, results or claims, and do not remove the substance. Keep it in the first person, and within the word limit.",
+            "Fix these signs of AI writing (after Wikipedia's 'Signs of AI writing'):",
+            "- Inflated significance: 'pivotal', 'crucial', 'testament to', 'underscores', 'plays a vital role', 'transformative', 'groundbreaking'. Say what happened instead.",
+            "- Stock words: 'delve', 'tapestry', 'landscape', 'realm', 'foster', 'leverage', 'seamless', 'robust', 'cutting-edge', 'dynamic', 'vibrant', 'meticulous', 'showcase', 'navigate', 'journey'.",
+            "- Promotional or gushing tone: 'I am deeply passionate', 'thrilled', 'excited to', 'eager to contribute', 'perfect fit'. One plain statement of interest is enough.",
+            "- Empty -ing tails: '..., highlighting the importance of ...', '..., demonstrating my ability to ...', '..., ensuring ...'. Cut them or state the result directly.",
+            "- Formula: 'not only ... but also', lists of exactly three adjectives or nouns, 'From X to Y', rhetorical questions, and a closing line that sums up ('Overall', 'In summary', 'Ultimately').",
+            "- Vague claims and hedges: 'various', 'numerous', 'a wide range of', 'I believe that', 'it is worth noting'. Be specific with what is already there, or cut.",
+            "- Punctuation and format: no em dashes (use commas, periods or parentheses), no bold, no headings, no bullet points, no emoji. Straight quotes.",
+            "Prefer short, concrete sentences and ordinary words. Vary sentence length. It is fine if the result is shorter.",
+            "If there is feedback, fix every item it lists."
+        ],
+        "human": "Word limit: {word_limit}\n\nFeedback on your previous edit (fix every item):\n{feedback}\n\nAnswer to edit:\n{text}"
+    },
+    "draft_answer": {
+        "system": [
+            "You write a first draft of a student's answer to a short-answer question on a job application, in the student's own voice (first person).",
+            "Use only the points you are given. Each point comes with the CV bullet it is based on: you may use the facts in that bullet, and nothing else. Do not add numbers, tools, names, results or experiences that are not there, and do not guess at what the company does beyond what the question, role and notes say.",
+            "Answer the question that was asked. Open with a direct answer in the first sentence, then support it with the points, connecting each one to the question or the role.",
+            "If the student added notes, follow them; they may add facts of their own.",
+            "Stay within the word limit. Short and specific beats long and general: one or two short paragraphs, plain sentences, no headings, bullet points or bold.",
+            "Write plainly. Avoid grand claims ('passionate', 'pivotal', 'testament'), filler, and a summing-up last sentence. Do not use em dashes.",
+            "Return only the answer text."
+        ],
+        "human": "Question: {question}\nRole: {title} at {company}\nWord limit: {word_limit}\n\nPoints to use:\n{points}\n\nStudent's notes: {notes}"
     }
 }

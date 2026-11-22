@@ -19,11 +19,17 @@ def _not_tailored(report_text: str) -> str | None:
 
 
 def render() -> None:
+    from autotailor.ui import tasks_panel
+
     st.title("Runs")
+    st.caption("Work runs in a background process: you can leave this page, and Stop keeps finished resumes.")
+    tasks_panel.start_buttons()
+    tasks_panel.live_tasks()
+    st.subheader("Past runs")
     with connection() as conn:
         runs = db.list_runs(conn, None)
         if not runs:
-            st.info("No runs yet. Start one with `autotailor tailor` or `autotailor run`.")
+            st.info("No runs yet.")
             return
         st.dataframe(
             pd.DataFrame([

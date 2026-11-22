@@ -56,6 +56,7 @@ class JobResult(TypedDict):
     errors: list[str]  # the last draft's verifier problems, when it failed verification
     attempts: int
     message: str | None  # why it failed, in a sentence
+    history: list[dict]  # every draft's bullets and problems, when the tailoring graph keeps them
 
 
 class Cancelled(Exception):
@@ -114,17 +115,24 @@ def make_worker(
             raise Cancelled(job["posting_id"])
         base = JobResult(
             index=job["index"], posting_id=job["posting_id"], status="failed",
-            resume=None, errors=[], attempts=0, message=None,
+            resume=None, errors=[], attempts=0, message=None, history=[],
         )  # fmt: skip
         try:
             # A graph invoked inside another graph's node inherits that graph's
             # checkpointer. A fresh context keeps the tailoring graph's drafts out of
             # the batch checkpoint; only finished results are saved there.
-            r = contextvars.Context().run(tailor, job["posting"], job["profile"], cv, settings)
+            def run():  # noqa: ANN202
+                from autotailor.ailog import current_item
+
+                current_item.set(job["posting_id"])  # labels this job's model calls in the AI log
+                return tailor(job["posting"], job["profile"], cv, settings)
+
+            r = contextvars.Context().run(run)
         except (NotImplementedError, Cancelled):
             raise
         except Exception as e:  # model errors, missing key, invalid output after retries
             return {**base, "message": f"{type(e).__name__}: {e}"}
+        base["history"] = list(getattr(r, "history", []) or [])
         if r.resume is None or r.errors:
             return {
                 **base,
@@ -216,6 +224,7 @@ class ReportRow:
     files: dict[str, Path]  # pdf, docx, posting (relative to the run folder)
     pages: int = 1
     others: int = 0  # same role posted in other places
+    warning: str | None = None  # e.g. LaTeX unavailable, Typst used instead
 
 
 def save_results(
@@ -237,6 +246,10 @@ def save_results(
     from autotailor.resume.output import write_outputs
     from autotailor.resume.render import pdf_page_count
 
+    from autotailor.paths import get_paths
+    from autotailor.resume.output import Style
+
+    style = Style.from_settings(settings, get_paths())
     ranked = matching.ranked(conn, settings)
     saved: dict[str, dict[str, Path]] = {}
     for a in db.run_artifacts(conn, run_id):
@@ -259,7 +272,7 @@ def save_results(
                 row.pages = pdf_page_count(pdf.read_bytes())
             else:
                 resume = TailoredResume.model_validate(r["resume"])
-                w = write_outputs(folder, r["index"], p, m, resume, cv, others)
+                w = write_outputs(folder, r["index"], p, m, resume, cv, others, style)
                 for kind, path in (
                     (ArtifactKind.RESUME_PDF, w.pdf), (ArtifactKind.RESUME_DOCX, w.docx),
                     (ArtifactKind.RESUME_DATA, w.data),
@@ -267,6 +280,9 @@ def save_results(
                     db.add_artifact(conn, run_id, p.id, kind.value, str(path.relative_to(outputs)), model)
                 row.files = {"pdf": w.pdf, "docx": w.docx, "posting": w.posting}
                 row.pages = w.pages
+                row.warning = w.warning
+                if r.get("history"):  # shown on the posting's Resume tab
+                    (w.folder / "attempts.json").write_text(json.dumps(r["history"], indent=1), encoding="utf-8")
         rows.append(row)
     return rows
 

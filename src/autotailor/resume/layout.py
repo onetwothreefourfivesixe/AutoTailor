@@ -92,4 +92,20 @@ def build_layout(r: TailoredResume, cv: MasterCV) -> dict[str, Any]:
         if items:
             skills.append({"name": g.name, "items": ", ".join(items)})
 
-    return {"name": c.name, "contact": contact_line, "sections": sections, "skills": skills}
+    return {"name": c.name, "contact": contact_line, "contact_items": contact_items(c), "sections": sections,
+            "skills": skills}  # fmt: skip
+
+
+def contact_items(c) -> list[dict[str, str | None]]:  # noqa: ANN001
+    """Contact details with a link where one makes sense (for templates that link them)."""
+    out: list[dict[str, str | None]] = []
+    if c.phone:
+        out.append({"text": c.phone, "url": None})
+    if c.email:
+        out.append({"text": c.email, "url": f"mailto:{c.email}"})
+    if c.location:
+        out.append({"text": c.location, "url": None})
+    for link in c.links:
+        url = link if "://" in link else f"https://{link}"
+        out.append({"text": link.removeprefix("https://").removeprefix("http://"), "url": url})
+    return out

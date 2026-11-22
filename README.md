@@ -46,21 +46,56 @@ Then:
 | `autotailor mail import [files]` | Import Runway emails saved as `.eml` into `data/inbox/` (or the files named). |
 | `autotailor mail pull` | Pull Runway emails from a Gmail label over IMAP (read-only). |
 | `autotailor mail listen` | Local mail server on 127.0.0.1 that accepts Runway emails forwarded from a desktop mail client. |
+| `autotailor answers add <posting> "<question>"` | Add an application's short-answer questions (or `--file`, one per blank-line-separated block). The limit is read from the text, e.g. "(150 words)". |
+| `autotailor answers run` | Suggest CV points for each question; draft and humanize the ones you opt in to. Output in `data/outputs/answers/`. |
 | `autotailor runway list` / `runway resolve` | Runway roles, and finding each one's posting on the employer's site (asks you when it can't). |
+| `autotailor models` | Which model each step uses, whether it's pulled in Ollama, and sizes. |
+| `autotailor compare <step> -m provider:model` | Rerun `extract`, `score`, `tailor` or `answers` on saved data with several models; report in `data/comparisons/`. Changes nothing stored. |
+| `autotailor api` | Local HTTP API at http://127.0.0.1:8765 (docs at `/docs`), for a custom frontend or a browser extension. |
+| `autotailor answers decide <id>` / `runway answer <id>` | Answer an opt-in or a Runway link question without prompts (`--draft/--points-only --use 1,3`, `--url/--text/--skip`). |
+| `autotailor worker` | Run queued background tasks (the UI starts it automatically). |
 | `autotailor ui` | Local web UI at http://127.0.0.1:8501: settings, master CV editor, runs and postings. |
 
 ### Web UI
 
 `autotailor ui` starts a local web UI. It listens on 127.0.0.1 only and has Streamlit's usage statistics switched off. On WSL, open the address in a Windows browser.
 
+- **Needs you**: everything waiting on you (Runway links, answer opt-ins, unclear verdicts near the top, resumes over a page, stopped runs), each with its action.
+- **Add jobs**: paste job links or a posting's text, or drop `.eml`, `.pdf`, `.html`, `.txt` files; a pasted raw email (Gmail "Show original") works too. Everything is previewed, editable, before it's saved.
+- **Runs**: start work (whole pipeline, fetch, screen, rank, tailor, Runway matching, answer points). It runs in a background worker process (`autotailor worker`, started for you), so you can leave the page; progress and output update live, and Stop works like Ctrl-C (finished resumes are kept; Resume continues).
+- **Postings** has a tab per stage: the text with the requirement quotes highlighted, eligibility with an **override** (wins everywhere, survives re-screening), fit with the cited CV bullets, the resume (preview of the saved PDF, diff against the CV, every draft attempt), answers, and the **AI log**: every model call for that posting with its prompt, response, model, time and tokens. The log stays on this machine and is kept 15 days (Settings > AI log).
+
 - **Overview**: which models run where, posting counts, the next shortlist, recent runs.
 - **Settings**: everything in `config.toml`. Saves are validated first, and the previous file is kept in `data/config_backups/`.
 - **Master CV**: edit, add, reorder and remove entries and bullets in every section, or edit the raw YAML. Saves are validated; the previous file is kept in `data/cv_backups/`. New entries and bullets get IDs when saved, and IDs never change. Deleting a bullet that a past resume used asks first and shows where it was used.
 - **Runs**: each run's resumes (PDF and Word downloads), each bullet beside the CV bullet it came from with reworded words marked, and the roles that weren't tailored, with reasons.
+- **Compare models**: comparison reports, with a summary table per model.
+- **Short answers**: add a posting's questions, see suggested points, pick which to draft from, and edit the drafts.
 - **Runway**: import emails, see each Runway role's status, and answer the roles waiting for an employer link.
 - **Postings**: every posting, including ineligible ones, with the requirements read from it (and the quoted evidence), the eligibility and fit reasons, and the full text.
 
 Runs are started from the terminal, not the UI, so long model calls don't depend on a browser tab.
+
+### Local API
+
+`autotailor api` serves everything the UI does over HTTP, on 127.0.0.1 only: overview and the Needs-you list, postings (with overrides and a resume preview image), runs and their files, background tasks (start by kind or by typed command, cancel, and a live event stream at `/api/tasks/{id}/events`), adding jobs and emails (preview, then save), the AI log, settings, the CV (validated; deleting bullets used in past resumes needs `confirm_delete_used`), Runway answers and short answers. Interactive documentation is at `/docs`.
+
+Every request must send the token from `data/api_token` in the `X-AutoTailor-Token` header (or `?token=` for download links), and the `Host` header must be localhost. This keeps websites open in your browser from using the API. To develop a browser frontend, allow its origin: `autotailor api --cors http://localhost:5173`.
+
+### Resume templates
+
+The PDF template is chosen in Settings > Resume template:
+
+- **Jake's Resume** (default): the popular LaTeX template by Jake Gutierrez (MIT). LaTeX is compiled with [Tectonic](https://tectonic-typesetting.github.io/), which AutoTailor downloads into `data/tools/` on first use (no sudo). Tectonic then fetches the TeX packages it needs once; no resume content leaves the machine. If it can't be downloaded (offline), the Typst template is used with a warning.
+- **AutoTailor classic** (Typst).
+- **Your own LaTeX template**: download Jake's as a starting point, change the look, upload it. Values go in as `((( name )))`, statements as `((* for s in sections *))`; all text is escaped for LaTeX.
+- **Your own Word template** (`.docx`, docxtpl syntax `{{ name }}`) for the Word file.
+
+Preview any template with your own CV before saving.
+
+### Short answers
+
+For each question, AutoTailor first suggests 2-5 experiences from your CV that answer it, and stops there unless you ask for a draft. A draft is written from only the points you pick (plus any notes you add), then rewritten by the humanizer step, whose prompt removes the usual signs of AI writing (inflated claims, stock words like "delve" or "testament", em dashes, formulaic endings). Every draft is then checked: no numbers or names that aren't in the chosen experiences, your CV skills and profile, the posting or the question; within the word limit; none of the stock phrases. Problems go back to the humanizer, up to `tailor.max_attempts` times; anything left is listed for you to fix. Treat the result as a first draft.
 
 ### Runs
 
@@ -162,6 +197,20 @@ model = "gemini-embedding-001"
 
 Ollama models read at most `context_window` tokens at once (default 16384, set per model block). Ollama's own default is much smaller and cuts long prompts without an error, so lower it only if you run short of memory.
 
+### Choosing models
+
+`autotailor compare` reruns one step on postings (or questions) you already have, once with the model the step uses now and once per `-m` model, and writes a side-by-side report:
+
+```bash
+ollama pull gemma4:12b
+autotailor compare tailor  -m ollama:gemma4:12b -n 3     # verification pass rate, drafts needed, bullets chosen
+autotailor compare score   -m ollama:gemma4:12b -n 10    # rank agreement with your stored fit scores
+autotailor compare extract -m ollama:gemma4:12b          # same eligibility verdict as stored?
+autotailor compare answers -m ollama:gemma4:12b          # problems left after humanizing, word count
+```
+
+Every trial is timed, so quality and speed can be weighed together. A cloud model in the list asks before any data is sent. Then set the winner per step with `autotailor config set` or on the Settings page. Rough guide for local models: a model needs about its download size in GPU memory plus some for the context; anything larger spills into system RAM and runs several times slower.
+
 Embedding vectors are cached per provider and model, so switching embedding models re-embeds everything once.
 
 `autotailor doctor` shows, per step, whether data leaves your machine, and checks that the key for each cloud provider in use is set.
@@ -184,10 +233,17 @@ src/autotailor/
   batch.py        batch runs: jobs, worker, run limits, checkpoints, outputs, report.md
   mail.py         Runway mail intake: drop folder, IMAP, local SMTP listener
   resolve.py      Runway role -> employer posting (job board match, or your link/text)
+  answers.py      short answers: question parsing, suggested points, facts-and-style check
+  compare.py      model comparisons on saved data (M9)
+  api.py          local HTTP API (FastAPI) (M11)
+  tasks.py        background task queue and worker (M10)
+  intake.py       pasted/dropped jobs and emails, previews (M10)
+  ailog.py        local AI call log (LangChain callback) (M10)
+  inbox.py        the Needs-you list (M10)
   ui/         Streamlit app (app.py, one page_*.py per page); logic.py holds the tested save/ID/diff helpers
-  resume/     verify.py (nothing beyond the CV), layout.py, render.py (Typst PDF, Word), output.py
+  resume/     verify.py (nothing beyond the CV), layout.py, render.py (templates, PDF, Word, previews), latex.py (Tectonic), output.py
   sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text), runway.py (email parser)
-  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph), batch_graph.py (M5 exercise, fan-out and checkpoints), resolve_graph.py (M7 exercise, interrupts)
+  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph), batch_graph.py (M5 exercise, fan-out and checkpoints), resolve_graph.py (M7 exercise, interrupts), answer_graph.py (M8 exercise, opt-in drafting)
               structured_prompts.json holds every step's prompt text and few-shot examples
 tests/
 ```

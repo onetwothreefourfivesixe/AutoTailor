@@ -127,7 +127,7 @@ def test_settings_page_saves(ran):
     at = _page("page_settings")
     at.number_input(key="set.jobs").set_value(4)
     at.text_area(key="set.interests").input("Robotics\nML infrastructure")
-    at.button[0].click().run()  # Save settings
+    next(b for b in at.button if b.label == "Save settings").click().run()
     assert not at.exception, at.exception
     s = load_settings(ran / "config.toml")
     assert s.run.jobs_per_run == 4 and s.profile.role_interests == ["Robotics", "ML infrastructure"]

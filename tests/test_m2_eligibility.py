@@ -231,7 +231,7 @@ def home(tmp_path, monkeypatch):
 def test_cli_screen(home, monkeypatch):
     sent: list[str] = []
 
-    def fake_batch(texts, settings, max_concurrency=4):
+    def fake_batch(texts, settings, max_concurrency=4, ids=None):
         sent.extend(texts)
         out = []
         for t in texts:

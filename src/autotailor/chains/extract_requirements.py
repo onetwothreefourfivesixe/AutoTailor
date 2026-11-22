@@ -107,7 +107,8 @@ def extract_requirements(text: str, settings: Settings, today: date | None = Non
 
 
 def extract_requirements_batch(
-    texts: list[str], settings: Settings, today: date | None = None, max_concurrency: int = 4
+    texts: list[str], settings: Settings, today: date | None = None, max_concurrency: int = 4,
+    ids: list[str] | None = None,
 ) -> list[Requirements | Exception]:
     """Extract many postings concurrently. Given.
 
@@ -116,8 +117,9 @@ def extract_requirements_batch(
     """
     llm = get_chat_model(settings, "extract")
     chain = build_chain(llm)
+    n = len(texts)  # `ids` (posting IDs) label each call in the AI log
     return chain.batch(
         [_inputs(t, today) for t in texts],
-        config={"max_concurrency": max_concurrency},
+        config=[{"max_concurrency": max_concurrency, "metadata": {"item": i}} for i in (ids or [None] * n)],
         return_exceptions=True,
     )

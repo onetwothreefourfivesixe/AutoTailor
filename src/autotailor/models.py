@@ -196,6 +196,23 @@ class TailoredResume(BaseModel):
     )
 
 
+class AnswerPoint(BaseModel):
+    source_id: str = Field(description="ID of the CV bullet this point draws on, copied exactly without brackets.")
+    point: str = Field(
+        description="What to say, in one sentence: the experience and what it shows, using only facts "
+        "the bullet states."
+    )
+    why: str = Field(description="Why it answers this question, in a few words.")
+
+
+class AnswerPoints(BaseModel):
+    """Experiences from the CV worth mentioning in a short answer. Produced by the suggest step (M8)."""
+
+    points: list[AnswerPoint] = Field(
+        description="2-5 points, most useful first. Each from a different CV bullet."
+    )
+
+
 class Match(BaseModel):
     posting_id: str
     verdict: Verdict
@@ -206,6 +223,9 @@ class Match(BaseModel):
     fit_score: float | None = Field(default=None, ge=0.0, le=1.0)
     fit_reasons: list[str] = Field(default_factory=list)
     fit: FitAssessment | None = None
+    original_verdict: Verdict | None = Field(
+        default=None, description="Set when the user overrode the verdict: what the rules and model decided."
+    )
 
 
 class ArtifactKind(StrEnum):

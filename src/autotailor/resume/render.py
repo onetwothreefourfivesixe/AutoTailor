@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,25 @@ def render_pdf(layout: dict[str, Any]) -> bytes:
     return typst.compile(template, sys_inputs={"data": json.dumps(layout, ensure_ascii=False)})
 
 
+def render_png(layout: dict[str, Any], ppi: int = 110) -> bytes:
+    """The first page as a PNG, for previews in the UI."""
+    import typst
+
+    template = (resources.files("autotailor.templates") / "resume.typ").read_bytes()
+    out = typst.compile(template, format="png", ppi=ppi, sys_inputs={"data": json.dumps(layout, ensure_ascii=False)})
+    return out[0] if isinstance(out, list) else out
+
+
 def pdf_page_count(pdf: bytes) -> int:
-    return len(re.findall(rb"/Type\s*/Page\b(?!s)", pdf))
+    """Pages in a PDF. pypdf reads compressed object streams too (Tectonic's output has them)."""
+    try:
+        import io
+
+        from pypdf import PdfReader
+
+        return len(PdfReader(io.BytesIO(pdf)).pages)
+    except Exception:  # not a readable PDF: count page objects directly
+        return len(re.findall(rb"/Type\s*/Page\b(?!s)", pdf))
 
 
 def render_docx(layout: dict[str, Any], path: Path) -> None:
@@ -88,3 +106,56 @@ def render_docx(layout: dict[str, Any], path: Path) -> None:
             p.add_run(g["items"]).font.size = Pt(9.5)
 
     doc.save(path)
+
+
+# --- templates (M10) ---------------------------------------------------------------------------
+
+BUILTIN_TEMPLATES = {"jake": "Jake's Resume (LaTeX)", "typst": "AutoTailor classic (Typst)"}
+
+
+@dataclass
+class Rendered:
+    pdf: bytes
+    template: str  # what was actually used
+    warning: str | None = None
+
+
+def render_resume(layout: dict[str, Any], template: str, templates_dir: Path, tools: Path) -> Rendered:
+    """The resume PDF with the chosen template. A LaTeX template that can't be used because
+    Tectonic is unavailable (e.g. offline on first use) falls back to Typst, with a warning;
+    a template with errors raises LatexError so it gets fixed rather than silently replaced."""
+    from autotailor.resume import latex
+
+    if template == "typst":
+        return Rendered(render_pdf(layout), "typst")
+    source = latex.builtin("jake.tex.j2") if template == "jake" else (templates_dir / template).read_text(encoding="utf-8")
+    tex = latex.render_tex(source, layout)
+    try:
+        return Rendered(latex.compile_pdf(tex, tools), template)
+    except latex.LatexUnavailable as e:
+        return Rendered(render_pdf(layout), "typst", f"{e} Used the Typst template instead.")
+
+
+def pdf_to_png(pdf: bytes, scale: float = 1.6) -> bytes:
+    """First page of a PDF as PNG (pypdfium2), for previews of any template."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(pdf)
+    try:
+        img = doc[0].render(scale=scale).to_pil()
+    finally:
+        doc.close()
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def render_docx_template(layout: dict[str, Any], template: Path, path: Path) -> None:
+    """Fill your own Word template (docxtpl: {{ name }}, {% for s in sections %} ...)."""
+    from docxtpl import DocxTemplate
+
+    doc = DocxTemplate(str(template))
+    doc.render(layout)
+    doc.save(str(path))

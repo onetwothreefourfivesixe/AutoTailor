@@ -83,10 +83,14 @@ def get_chat_model(settings: Settings, step: Step) -> BaseChatModel:
     """Build the chat model configured for a pipeline step."""
     from langchain.chat_models import init_chat_model  # imported lazily: slow import
 
+    from autotailor.ailog import logger_for
+
     load_api_keys()
     spec = settings.models.for_step(step)
+    handler = logger_for(settings, step)  # the local AI call log (M10); None when switched off
     return init_chat_model(
-        spec.model, model_provider=spec.provider, **model_kwargs(spec, settings)
+        spec.model, model_provider=spec.provider, callbacks=[handler] if handler else None,
+        **model_kwargs(spec, settings),
     )
 
 

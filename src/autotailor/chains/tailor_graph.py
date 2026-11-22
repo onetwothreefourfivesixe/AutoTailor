@@ -152,10 +152,34 @@ class TailorResult(NamedTuple):
     resume: TailoredResume | None
     errors: list[str]
     attempts: int
+    history: list[dict] = []  # one entry per draft, when the graph keeps a history (M10 exercise)
 
 
 def tailor_posting(posting: str, profile: str, cv: MasterCV, settings: Settings) -> TailorResult:
     """Run the graph for one posting with the `tailor` step's model. Given."""
     graph = build_graph(get_chat_model(settings, "tailor"), cv, settings.tailor)
     final = graph.invoke({"posting": posting, "profile": profile})
-    return TailorResult(final.get("resume"), list(final.get("errors", [])), final.get("attempts", 0))
+    history = [h if isinstance(h, dict) else dict(h) for h in final.get("history", [])]
+    return TailorResult(final.get("resume"), list(final.get("errors", [])), final.get("attempts", 0), history)
+
+
+# ------------------------------------------------------------------------------
+# M10 exercise: keep every draft, not just the last
+# ------------------------------------------------------------------------------
+#
+# Right now each draft replaces the previous one in the state, so only the last
+# draft and its problems survive. The UI's Resume tab can show every attempt if
+# the final state also has a "history" key: a list with one entry per draft,
+#
+#     {"attempt": 1, "bullets": ["exp-a", "proj-b", ...], "errors": ["Bullet 2: ...", ...]}
+#
+# (bullets: the source_ids that draft chose; errors: what verify found, [] if it passed).
+#
+# This is what reducers are for (concept 2 at the top of this file):
+#
+#     history: Annotated[list[dict], operator.add]
+#
+# then return {"history": [entry]} from the node that knows both the draft and
+# its errors, and LangGraph appends it. Check with:
+#
+#     uv run pytest tests/test_m4_tailor_graph.py -k history

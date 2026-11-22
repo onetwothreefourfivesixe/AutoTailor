@@ -220,6 +220,23 @@ class ModelSettings(_Model):
 # --- Root ------------------------------------------------------------------
 
 
+class ResumeSettings(_Model):
+    template: str = Field(
+        default="jake",
+        description="'jake' (Jake's Resume, LaTeX), 'typst' (the original AutoTailor look), or the file name "
+        "of your own .tex template in data/templates/.",
+    )
+    word_template: str = Field(
+        default="", description="File name of your own .docx template in data/templates/; empty for the built-in Word layout."
+    )
+
+
+class LogSettings(_Model):
+    enabled: bool = Field(default=True, description="Record every model call in the local AI log.")
+    keep_prompts: bool = Field(default=True, description="Store prompts and responses, not just timing and status.")
+    retention_days: int = Field(default=15, ge=1, description="Delete logged calls older than this.")
+
+
 class Settings(_Model):
     profile: Profile = Field(default_factory=Profile)
     eligibility: EligibilityRules = Field(default_factory=EligibilityRules)
@@ -228,6 +245,8 @@ class Settings(_Model):
     sources: SourceSettings = Field(default_factory=SourceSettings)
     mail: MailSettings = Field(default_factory=MailSettings)
     models: ModelSettings = Field(default_factory=ModelSettings)
+    log: LogSettings = Field(default_factory=LogSettings)
+    resume: ResumeSettings = Field(default_factory=ResumeSettings)
 
 
 def load_settings(path: Path) -> Settings:

@@ -14,7 +14,7 @@ from pathlib import Path
 from autotailor.dedupe import dedupe_key, locations_compatible, normalize_url
 from autotailor.models import FitAssessment, JobPosting, Match, PostingStatus, Requirements, Verdict
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS postings (
@@ -134,11 +134,72 @@ CREATE TABLE IF NOT EXISTS company_boards (
 );
 """
 
+_SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS questions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    posting_id  TEXT NOT NULL REFERENCES postings (id) ON DELETE CASCADE,
+    text        TEXT NOT NULL,
+    word_limit  INTEGER,
+    status      TEXT NOT NULL DEFAULT 'new',   -- new | waiting | points | drafted | failed
+    points_json TEXT,                          -- suggested points (AnswerPoint list)
+    answer      TEXT,                          -- the humanized draft, when drafted
+    problems_json TEXT NOT NULL DEFAULT '[]',  -- fact-check problems left in the last draft
+    model       TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_questions_posting ON questions (posting_id);
+"""
+
+_SCHEMA_V6 = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL,                 -- fetch | screen | rank | tailor | resume | resolve | mail | answers | run
+    args_json     TEXT NOT NULL DEFAULT '[]',    -- extra CLI arguments
+    status        TEXT NOT NULL DEFAULT 'queued',-- queued | running | done | failed | cancelled
+    done          INTEGER,                       -- progress, when the task reports it
+    total         INTEGER,
+    message       TEXT,
+    log           TEXT NOT NULL DEFAULT '',
+    pid           INTEGER,
+    cancel        INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    started_at    TEXT,
+    finished_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL,
+    step       TEXT,
+    provider   TEXT,
+    model      TEXT,
+    local      INTEGER,
+    item       TEXT,                             -- posting ID or 'question:<id>' the call was for
+    task_id    INTEGER,
+    messages   TEXT,                             -- the prompt, as JSON [{role, content}]
+    response   TEXT,
+    error      TEXT,
+    ms         INTEGER,
+    tokens_in  INTEGER,
+    tokens_out INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_item ON llm_calls (item);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls (at);
+CREATE TABLE IF NOT EXISTS overrides (
+    posting_id TEXT PRIMARY KEY REFERENCES postings (id) ON DELETE CASCADE,
+    verdict    TEXT NOT NULL,                    -- eligible | ineligible
+    note       TEXT,
+    created_at TEXT NOT NULL
+);
+"""
+
 _MIGRATIONS = {
     1: (_SCHEMA_V1, None),
     2: (_SCHEMA_V2, _backfill_v2),
     3: (_SCHEMA_V3, None),
     4: (_SCHEMA_V4, None),
+    5: (_SCHEMA_V5, None),
+    6: (_SCHEMA_V6, None),
 }
 
 
@@ -149,9 +210,13 @@ def _now() -> str:
 def connect(path: Path) -> sqlite3.Connection:
     """Open the database, creating or upgrading the schema as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    # The UI, the background worker and the task it runs share this file: wait for locks
+    # instead of failing, and use the write-ahead log so readers don't block the writer.
+    conn = sqlite3.connect(path, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if str(path) != ":memory:":
+        conn.execute("PRAGMA journal_mode = WAL")
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         raise RuntimeError(
@@ -347,11 +412,26 @@ def save_match(conn: sqlite3.Connection, m: Match) -> None:
     conn.commit()
 
 
+_MATCH_SQL = (
+    "SELECT m.*, o.verdict AS o_verdict, o.note AS o_note FROM matches m "
+    "LEFT JOIN overrides o ON o.posting_id = m.posting_id"
+)
+
+
 def _row_to_match(row: sqlite3.Row) -> Match:
+    """A stored match, with the user's override (if any) applied: overrides win everywhere
+    (ranking, shortlist, UI) and survive `screen --rejudge`, which only rewrites `matches`."""
+    reasons = json.loads(row["verdict_reasons_json"])
+    verdict, original = row["verdict"], None
+    keys = row.keys()
+    if "o_verdict" in keys and row["o_verdict"]:
+        verdict, original = row["o_verdict"], row["verdict"]
+        reasons = [f"Overridden by you: {row['o_note'] or 'no note'} (was {original})."] + reasons
     return Match(
         posting_id=row["posting_id"],
-        verdict=row["verdict"],
-        verdict_reasons=json.loads(row["verdict_reasons_json"]),
+        verdict=verdict,
+        original_verdict=original,
+        verdict_reasons=reasons,
         prescore=row["prescore"],
         fit_score=row["fit_score"],
         fit_reasons=json.loads(row["fit_reasons_json"]),
@@ -418,15 +498,13 @@ def put_embedding(
 
 
 def get_match(conn: sqlite3.Connection, posting_id: str) -> Match | None:
-    row = conn.execute("SELECT * FROM matches WHERE posting_id = ?", (posting_id,)).fetchone()
+    row = conn.execute(_MATCH_SQL + " WHERE m.posting_id = ?", (posting_id,)).fetchone()
     return _row_to_match(row) if row else None
 
 
 def all_matches(conn: sqlite3.Connection, verdict: Verdict | None = None) -> dict[str, Match]:
-    sql, args = "SELECT * FROM matches", ()
-    if verdict:
-        sql, args = sql + " WHERE verdict = ?", (verdict.value,)
-    return {r["posting_id"]: _row_to_match(r) for r in conn.execute(sql, args).fetchall()}
+    out = {r["posting_id"]: _row_to_match(r) for r in conn.execute(_MATCH_SQL).fetchall()}
+    return {k: m for k, m in out.items() if verdict is None or m.verdict == verdict}
 
 
 def start_run(conn: sqlite3.Connection, settings_json: str) -> int:
@@ -495,6 +573,19 @@ def artifacts_for(conn: sqlite3.Connection, posting_id: str) -> list[sqlite3.Row
     return conn.execute(
         "SELECT * FROM artifacts WHERE posting_id = ? ORDER BY created_at DESC, id DESC", (posting_id,)
     ).fetchall()
+
+
+def set_override(conn: sqlite3.Connection, posting_id: str, verdict: Verdict, note: str | None) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO overrides (posting_id, verdict, note, created_at) VALUES (?, ?, ?, ?)",
+        (posting_id, verdict.value, (note or "").strip() or None, _now()),
+    )
+    conn.commit()
+
+
+def clear_override(conn: sqlite3.Connection, posting_id: str) -> None:
+    conn.execute("DELETE FROM overrides WHERE posting_id = ?", (posting_id,))
+    conn.commit()
 
 
 def delete_posting(conn: sqlite3.Connection, posting_id: str) -> None:
@@ -570,6 +661,46 @@ def learn_board(conn: sqlite3.Connection, company_key: str, source: str, slug: s
         "INSERT OR REPLACE INTO company_boards (company_key, source, slug, learned_at) VALUES (?, ?, ?, ?)",
         (company_key, source, slug, _now()),
     )
+    conn.commit()
+
+
+# --- short-answer questions (M8) ---------------------------------------------------
+
+
+def add_question(conn: sqlite3.Connection, posting_id: str, text: str, word_limit: int | None) -> int:
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO questions (posting_id, text, word_limit, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (posting_id, text, word_limit, now, now),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_question(conn: sqlite3.Connection, question_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
+
+
+def list_questions(conn: sqlite3.Connection, posting_id: str | None = None) -> list[sqlite3.Row]:
+    sql, args = "SELECT * FROM questions", ()
+    if posting_id:
+        sql, args = sql + " WHERE posting_id = ?", (posting_id,)
+    return conn.execute(sql + " ORDER BY posting_id, id", args).fetchall()
+
+
+def update_question(conn: sqlite3.Connection, question_id: int, **fields) -> None:  # noqa: ANN003
+    """Set any of: status, points (list), answer, problems (list), model."""
+    cols = {"status": "status", "answer": "answer", "model": "model", "points": "points_json", "problems": "problems_json"}
+    sets, args = [], []
+    for k, v in fields.items():
+        sets.append(f"{cols[k]} = ?")
+        args.append(json.dumps(v) if k in ("points", "problems") else v)
+    conn.execute(f"UPDATE questions SET {', '.join(sets)}, updated_at = ? WHERE id = ?", (*args, _now(), question_id))  # noqa: S608
+    conn.commit()
+
+
+def delete_question(conn: sqlite3.Connection, question_id: int) -> None:
+    conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
     conn.commit()
 
 

@@ -26,6 +26,12 @@ def render() -> None:
     rows.append({"Step": "embeddings", "Model": f"{e.provider}:{e.model}", "Data": where(e)})
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
+    from autotailor.ui import page_needs
+
+    waiting = page_needs.count()
+    if waiting:
+        st.info(f"**{waiting} item(s) need you**: see the Needs you page.")
+
     _, cv_error = load_cv()
     if cv_error:
         st.error(f"Master CV: {cv_error}")
@@ -73,7 +79,7 @@ def render() -> None:
             st.info("No runs yet.")
 
     st.subheader("Running the pipeline")
-    st.markdown("Runs start from a terminal, so long model calls don't depend on this page staying open:")
+    st.markdown("Start work on the **Runs** page (it runs in the background), or from a terminal:")
     st.code(
         "autotailor run        # fetch, screen, rank, tailor\n"
         "autotailor tailor     # only tailor the current shortlist\n"
