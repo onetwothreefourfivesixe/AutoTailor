@@ -244,7 +244,8 @@ def test_cli_rank_and_shortlist(home, monkeypatch):
     assert len(scored) == 2  # the ineligible PhD posting is not ranked
     assert "ignored unknown CV bullet IDs ['bogus']" in r.output
     lines = [line for line in r.output.splitlines() if "  paste:" in line]  # ranking rows only
-    assert "paste:ml" in lines[0] and "paste:acct" in lines[1]
+    assert "paste:ml" in lines[0] and not any("paste:acct" in line for line in lines)
+    assert "Deleted 1 below the fit cut-off" in r.output  # accounting scored under 0.6 and was cut
     assert lines[0].lstrip().startswith("0.88")  # 0.35*1 + 0.35*0.75 + 0.15*1 + 0.15*0.75 = 0.875
     assert "1 postings meet the minimum fit score" in r.output
 
@@ -257,7 +258,7 @@ def test_cli_rank_and_shortlist(home, monkeypatch):
     runner.invoke(app, ["rank"])
     assert not scored  # already scored; --rescore forces it
     runner.invoke(app, ["rank", "--rescore"])
-    assert len(scored) == 2
+    assert len(scored) == 1  # the cut posting is gone
 
 
 def test_cli_rank_by_similarity_when_the_model_is_unavailable(home, monkeypatch):
@@ -416,3 +417,26 @@ def test_a_failed_upgrade_leaves_the_previous_version(tmp_path, monkeypatch):
     raw = sqlite3.connect(path)
     assert raw.execute("PRAGMA user_version").fetchone()[0] == 2  # v3 isn't kept either: one transaction
     assert not raw.execute("SELECT name FROM sqlite_master WHERE name = 'ok_so_far'").fetchone()
+
+
+def test_cli_rank_scores_chosen_postings(home, monkeypatch):
+    phd = _posting("paste:phd", "PhD Intern", "Python vision model research.")
+    _store(home, (ML, Verdict.ELIGIBLE), (ACCT, Verdict.UNCLEAR), (phd, Verdict.INELIGIBLE))
+    conn = db.connect(home / "data" / "autotailor.db")
+    db.upsert_posting(conn, _posting("paste:new", "New Intern", "Not screened yet."))
+    conn.close()
+    scored: list[str] = []
+
+    def fake_score(postings, profile, settings, max_concurrency=4, ids=None):
+        scored.extend(ids)
+        return [_assessment(1, 1, 1, 1) for _ in postings]  # low: below the cut-off
+
+    monkeypatch.setattr("autotailor.chains.score_fit.score_fit_batch", fake_score)
+    r = CliRunner().invoke(app, ["rank", "paste:phd", "paste:new", "paste:nope"])
+    assert r.exit_code == 0, r.output
+    assert scored == ["paste:phd"]  # chosen: scored even though ineligible; the unscreened one is skipped
+    assert "paste:new: not screened yet" in r.output and "paste:nope: not found" in r.output
+    assert "paste:phd: fit 0.00" in r.output and "Deleted" not in r.output  # kept despite the low score
+    conn = db.connect(home / "data" / "autotailor.db")
+    assert db.get_posting(conn, "paste:phd") is not None
+    conn.close()

@@ -142,3 +142,69 @@ def write_outputs(
     }, indent=1), encoding="utf-8")  # fmt: skip
     paths.posting.write_text(posting_markdown(p, m, list(also), coverage), encoding="utf-8")
     return paths
+
+
+# --- editing a saved resume -------------------------------------------------------------------
+
+ORIGINAL = "tailored.original.json"
+
+
+@dataclass
+class Edited:
+    pages: int
+    warnings: list[str]
+    keyword_score: float | None
+
+
+def edit_warnings(r: TailoredResume, cv: MasterCV) -> list[str]:
+    """Notes on a hand edit: words or numbers the CV doesn't have. Not errors (the user knows
+    what's true), but worth a look, and worth adding to the CV if they're right."""
+    from autotailor.resume.verify import _numbers, _parents, _terms, _vocabulary
+
+    bullets, parents = cv.bullets(), _parents(cv)
+    skills = set().union(*(_vocabulary(s) for g in cv.skills for s in g.items)) if cv.skills else set()
+    out = []
+    for b in r.bullets:
+        source = bullets[b.source_id].text
+        new_numbers = sorted(_numbers(b.text) - _numbers(source))
+        allowed = _vocabulary(f"{source} {parents.get(b.source_id, '')}") | skills
+        new_terms = sorted(t for t in _terms(b.text) if t not in allowed)
+        if new_numbers or new_terms:
+            what = ", ".join([*new_numbers, *new_terms])
+            out.append(f"{b.source_id}: {what} isn't in your CV. Fine if it's true; add it to your Master CV to reuse it.")
+    return out
+
+
+def save_edit(folder: Path, pdf: Path, docx: Path, data: Path, resume: TailoredResume, cv: MasterCV,
+              style: Style, posting_text: str) -> Edited:  # fmt: skip
+    """Re-render an edited resume over its files (no page fill: the user's choice is kept as is).
+    The first edit keeps the tailored version in ORIGINAL so it can be restored."""
+    import json
+
+    from autotailor.resume.fill import keyword_coverage
+
+    original = folder / ORIGINAL
+    if not original.exists() and data.exists():
+        original.write_text(data.read_text(encoding="utf-8"), encoding="utf-8")
+    layout = style.layout(resume, cv)
+    if style.template == "typst" or style.templates_dir is None or style.tools is None:
+        pdf_bytes = render_pdf(layout)
+    else:
+        pdf_bytes = render_resume(layout, style.template, style.templates_dir, style.tools).pdf
+    pdf.write_bytes(pdf_bytes)
+    if style.word_template and style.templates_dir is not None:
+        render_docx_template(layout, style.templates_dir / style.word_template, docx)
+    else:
+        render_docx(layout, docx)
+    data.write_text(resume.model_dump_json(indent=2), encoding="utf-8")
+    coverage = keyword_coverage(resume.keywords, layout, posting_text)
+    fit_file = folder / "fit.json"
+    fit = json.loads(fit_file.read_text(encoding="utf-8")) if fit_file.exists() else {}
+    on_page = {b.source_id for b in resume.bullets}
+    fit.update({
+        "added_to_fill": [i for i in fit.get("added_to_fill", []) if i in on_page], "edited": True,
+        "pages": pdf_page_count(pdf_bytes), "keyword_score": coverage.score,
+        "keywords_matched": coverage.matched, "keywords_missing": coverage.missing,
+    })  # fmt: skip
+    fit_file.write_text(json.dumps(fit, indent=1), encoding="utf-8")
+    return Edited(fit["pages"], edit_warnings(resume, cv), coverage.score)

@@ -59,7 +59,7 @@ That's it: the first time, AutoTailor creates its settings and database, then op
 1. **Where the AI runs**: on your computer with Ollama (free and private), in the cloud with an API key (it shows you how to get one, step by step, and saves it on your computer), or a mix.
 2. **Your CV**: drag in your current resume or CV (PDF, Word, text or Markdown). AutoTailor reads it, sorts it into sections, and shows you the result to check before saving. Any line the AI didn't copy word for word is flagged. Include everything you might ever put on a resume; AutoTailor picks the right parts for each job.
 3. **About you**: your degree and expected graduation date (filled in from your CV), the roles you want, where you'd work.
-4. **Job boards**: tick the companies to follow from a list of 139, or add your own.
+4. **Job boards**: describe the fields you're interested in, in your own words ("biomedical", "robotics and space", "quant finance"), and press **Find companies**: AutoTailor picks matching companies from its catalog of over 700 verified job boards (biotech, medical devices, digital health, AI, developer tools, fintech, quant trading, security, robotics, aerospace and defense, hardware, climate and energy, education, logistics, games and media, consumer, business software), checks each for open jobs, and ticks them (for "biomedical", about 160). Optionally it also asks the AI for more companies; each one's board must exist, belong to that company and mention the field before it's listed, and the ones that pass are saved to your catalog (`data/learned_boards.json`) so later searches include them. Boards that disappear are dropped from searches until they come back. You can also tick companies by hand, or add your own.
 
 Then press **Run the pipeline now**: AutoTailor fetches postings, screens and ranks them, and tailors resumes for the best ones. Progress shows in the task tray, bottom right; the results appear on the Today page. Press Ctrl-C in the terminal to stop the app.
 
@@ -98,7 +98,9 @@ school = "UC Berkeley"
 Handy anywhere:
 
 - **Add** (press `A`, or drop a file anywhere on the page): paste job links or a posting's text, or drop `.pdf`, `.html`, `.txt` or Runway `.eml` files. You see what was read before anything is saved.
-- **Search** (`Ctrl K`, or `⌘ K` on a Mac): jump to any job or page, or start any task.
+- **Search** (`Ctrl K`, or `⌘ K` on a Mac): jump to any job or page, or start any task. Type a command with its options (`rank --rescore`) to run it.
+- **Command line** (in the sidebar): AutoTailor's commands as in the terminal, with their output as they run, ↑/↓ history, and a list of every command (**Commands**; add `--help` to one for its options). It runs AutoTailor's own commands only, never a shell.
+- **Score fit**: on a job's page, or for the jobs you select on the Jobs page (`s`), scores fit with the `score` step's model, again if it was scored before (same as `autotailor rank <posting ids>`).
 - **Keyboard on the Jobs page:** `j`/`k` to move, `Enter` to open, `x` to select, `e`/`i` to mark eligible or ineligible, `t` to tailor, `h` to hide, `/` to search.
 
 Long jobs (screening, ranking, tailoring) run in the background, so you can leave the page or close the browser. **Stop** in the task tray works like Ctrl-C: finished resumes are kept, and **Resume** on the Runs page picks up where it stopped.
@@ -121,6 +123,7 @@ The run's `report.md` links everything and lists any job that couldn't be tailor
 2. **Your wording stays.** Bullets are copied as you wrote them; the AI may only swap in the posting's term for something a bullet already says ("data visualization" for "made charts"). A checker rejects any draft that rewrites a bullet in its own words, or adds tools, numbers or results your CV doesn't state, and the AI tries again. For word-for-word copies only, set Settings › Runs and limits › Bullet wording. If no draft passes, you get your usual resume, ordered and filled for the posting, with a note saying so.
 3. **The page is filled.** The rest of your usual resume goes in first, then your next most relevant CV bullets, word for word, until one more would spill onto a second page. A draft that runs over a page is trimmed from its least relevant end (your education lines stay). Turn this off under Settings › Runs and limits › "Fill the page".
 4. **Keyword match.** The job's Resume tab shows how many of the posting's key terms appear on the resume (80% or more is a strong match) and which are missing. If a missing one is true for you, add it to your CV and tailor again; AutoTailor never adds it for you.
+5. **Your final tweaks.** Click the resume on the job's Resume tab to see it full size, then **Edit** to reorder, remove or reword bullets, add bullets from your CV, or choose which skills come first. Saving re-renders the PDF and Word files for that job only (your Master CV doesn't change). If an edit adds a number or tool your CV doesn't have, you get a note, not an error. **Restore tailored version** undoes every edit.
 
 ## Where jobs come from
 
@@ -132,9 +135,15 @@ title_include = ["intern", "internship", "co-op"]   # keep only these titles; []
 greenhouse = ["figma", "stripe"]    # boards.greenhouse.io/figma
 lever = ["palantir"]                # jobs.lever.co/palantir
 ashby = ["openai"]                  # jobs.ashbyhq.com/openai
+max_age_days = 21                   # skip postings published more than 3 weeks ago; 0 = no cutoff
+keep_undated = true                 # keep postings that don't say when they were published
 ```
 
+Saved postings older than the cutoff (by publish date, or by when they were first pulled) are deleted at every fetch and rank (`delete_expired = true`), and so are postings whose fit score is below the cut-off (Settings › Runs and limits: by default the minimum fit score; choose "hide" there to keep them instead). Postings you tailored, applied to, overrode or added questions for are never deleted. A tiny record of each deleted posting stops it from being fetched and scored again; the Jobs page's **Cut** view lists them, with **Allow again**. `autotailor prune` does all this on demand and shrinks the database file. `autotailor fetch --max-age 60` overrides the cutoff once.
+
 Many large companies (Apple, Google, Microsoft, Amazon, ...) use their own careers sites, which AutoTailor can't read. Paste those postings instead.
+
+**Finding companies by field.** `uv run autotailor discover "medical devices, neurotech"` lists companies in those fields with open jobs (`--add` follows them all, `--no-model` uses only the built-in catalog). Only your description is sent to the model, never your CV.
 
 **Pasted postings.** Use **Add** with a link or the posting's text. LinkedIn, Handshake, Indeed, Glassdoor and Runway don't allow automated access, so AutoTailor never opens their links: open the posting yourself and paste its text.
 

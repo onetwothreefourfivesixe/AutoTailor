@@ -255,9 +255,12 @@ def fit_reasons(a: FitAssessment) -> list[str]:
 
 def ranked(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPosting, Match]]:
     """Postings that pass the eligibility gate, best first: fit score where there is one,
-    then prescore. Postings without a description are left out (nothing to tailor to)."""
+    then prescore. Left out: postings without a description (nothing to tailor to), and
+    ones older than the date cutoff (sources.max_age_days)."""
     from autotailor.eligibility import passes_gate
+    from autotailor.ingest import is_recent
 
+    src = settings.sources
     matches = db.all_matches(conn)
     hidden = db.hidden_ids(conn)
     rows = [
@@ -265,6 +268,7 @@ def ranked(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPostin
         for p in db.list_postings(conn, None)
         if p.id in matches and p.id not in hidden and p.description
         and passes_gate(matches[p.id].verdict, settings.eligibility)
+        and is_recent(p, src.max_age_days, src.keep_undated)
     ]
     rows.sort(
         key=lambda pm: (
@@ -283,6 +287,46 @@ def same_role(p: JobPosting, rows: list[tuple[JobPosting, Match]]) -> list[JobPo
 
     key = dedupe_key(p.company, p.title)
     return [q for q, _ in rows if q.id != p.id and dedupe_key(q.company, q.title) == key]
+
+
+def cut_threshold(run) -> float | None:  # noqa: ANN001
+    """The fit score below which postings are cut, or None when cutting is off."""
+    if not run.cut_low_fit:
+        return None
+    return run.min_fit_score if run.cut_below is None else run.cut_below
+
+
+def is_cut(m: Match | None, run) -> bool:  # noqa: ANN001
+    # (with cut_action "delete" such postings are removed by prune(); this also covers "hide")
+    """Whether a posting's fit score puts it below the cut-off (never for unscored postings)."""
+    limit = cut_threshold(run)
+    return limit is not None and m is not None and m.fit_score is not None and m.fit_score < limit
+
+
+def prune(conn: sqlite3.Connection, settings: Settings, now=None) -> dict[str, int]:  # noqa: ANN001
+    """Delete postings that are below the fit cut-off (run.cut_action = "delete") or older than
+    sources.max_age_days (sources.delete_expired), sparing protected ones. Returns counts by reason."""
+    from datetime import UTC, datetime, timedelta
+
+    protected = db.protected_ids(conn)
+    cuts: dict[str, tuple[str, float | None]] = {}
+    matches = db.all_matches(conn)
+    if settings.run.cut_action == "delete":
+        for pid, m in matches.items():
+            if pid not in protected and is_cut(m, settings.run):
+                cuts[pid] = ("low_fit", m.fit_score)
+    src = settings.sources
+    if src.delete_expired and src.max_age_days > 0:
+        oldest = ((now or datetime.now(UTC)) - timedelta(days=src.max_age_days)).isoformat(timespec="seconds")
+        rows = conn.execute(
+            "SELECT id FROM postings WHERE COALESCE(posted_at, first_seen_at) < ?", (oldest,)
+        ).fetchall()  # ISO strings in UTC compare in time order
+        for (pid,) in rows:
+            if pid not in protected and pid not in cuts:
+                m = matches.get(pid)
+                cuts[pid] = ("too_old", m.fit_score if m else None)
+    db.cut_postings(conn, cuts)
+    return {r: sum(1 for x, _ in cuts.values() if x == r) for r in ("low_fit", "too_old")}
 
 
 def shortlist(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPosting, Match]]:

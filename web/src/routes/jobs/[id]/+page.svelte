@@ -7,6 +7,7 @@
 	import { APP_LABELS, APP_STATUSES, type AiCall, type ResumeView, type Question } from '$lib/types';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import VerdictPill from '$lib/components/VerdictPill.svelte';
+	import ResumeViewer from '$lib/components/ResumeViewer.svelte';
 
 	let { data } = $props();
 	const job = $derived(data.job);
@@ -50,13 +51,16 @@
 	// --- resume (loaded when its tab opens)
 	let resume = $state<ResumeView | null | undefined>(undefined);
 	let draft = $state(0);
+	let viewing = $state(false);
+	let version = $state(0); // bumped after an edit so the preview images reload
+	function loadResume() {
+		return get<ResumeView>(`/jobs/${enc(p.id)}/resume`).then((r) => {
+			resume = r;
+			draft = r.history.length;
+		}).catch(() => (resume = null));
+	}
 	$effect(() => {
-		if (tab === 'resume' && resume === undefined && job.has_resume) {
-			get<ResumeView>(`/jobs/${enc(p.id)}/resume`).then((r) => {
-				resume = r;
-				draft = r.history.length;
-			}).catch(() => (resume = null));
-		}
+		if (tab === 'resume' && resume === undefined && job.has_resume) loadResume();
 	});
 
 	// --- AI log
@@ -97,6 +101,9 @@
 		{#if apply}<a class="btn" href={apply} target="_blank" rel="noreferrer">Open posting ↗</a>{/if}
 		<button class="btn btn-primary" disabled={!p.description} onclick={() => act(() => send('POST', '/jobs/bulk', { ids: [p.id], action: 'tailor' }), 'Tailoring started. Follow it in the task tray.')}>
 			{job.has_resume ? 'Tailor again' : 'Tailor resume'}
+		</button>
+		<button class="btn" disabled={!p.description || !m} title={m ? "Fit-score this job with the score step's model" : 'Screen it first'} onclick={() => act(() => send('POST', '/jobs/bulk', { ids: [p.id], action: 'score' }), 'Fit scoring started. Follow it in the task tray.')}>
+			{m?.fit_score != null ? 'Score fit again' : 'Score fit'}
 		</button>
 		<select
 			class="input w-auto"
@@ -188,7 +195,7 @@
 		</div>
 	{:else if tab === 'fit'}
 		{#if !m?.fit}
-			<p class="card p-5 text-muted">No fit score yet. Rank to score it.</p>
+			<p class="card p-5 text-muted">No fit score yet. Use “Score fit” above{m ? '' : ' (after screening it)'}.</p>
 		{:else}
 			<div class="grid gap-4 md:grid-cols-2">
 				{#each ['skills', 'experience', 'level', 'interests'] as const as k (k)}
@@ -220,11 +227,16 @@
 		{:else}
 			<div class="grid gap-6 xl:grid-cols-[minmax(0,34rem)_1fr]">
 				<div>
-					<img src="/api/postings/{enc(p.id)}/resume.png" alt="The tailored resume" class="w-full rounded-lg border border-line bg-white shadow-sm" />
+					<button class="group relative block w-full cursor-zoom-in" onclick={() => (viewing = true)} aria-label="Open the resume full size, with editing">
+						<img src="/api/postings/{enc(p.id)}/resume.png?v={version}" alt="The tailored resume" class="w-full rounded-lg border border-line bg-white shadow-sm" />
+						<span class="absolute right-2 bottom-2 rounded bg-black/70 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">Click to enlarge or edit</span>
+					</button>
+					<ResumeViewer bind:open={viewing} postingId={p.id} {resume} {version} onsaved={() => { version += 1; loadResume(); }} />
 					<div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
+						<button class="btn btn-sm" onclick={() => (viewing = true)}>Enlarge / edit</button>
 						{#if resume.pdf}<a class="btn btn-sm" href="/api/files/{resume.pdf}">Download PDF</a>{/if}
 						{#if resume.docx}<a class="btn btn-sm" href="/api/files/{resume.docx}">Download Word</a>{/if}
-						<span class="text-muted">Run {resume.run_id} · {resume.model} · {resume.pages} page(s)</span>
+						<span class="text-muted">Run {resume.run_id} · {resume.model} · {resume.pages} page(s){resume.edited ? ' · edited by you' : ''}</span>
 					</div>
 				</div>
 				<div class="space-y-4">

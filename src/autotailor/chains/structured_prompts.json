@@ -155,6 +155,7 @@
       "Choosing bullets:",
       "- Each bullet in the candidate profile starts with its ID in [brackets]. Prefer bullets that show the posting's required skills and duties, then its preferred ones. The profile may list the bullets fit scoring found most relevant; use them.",
       "- Cover the posting's top requirements across your bullets: if it asks for Python, ML and teamwork, the chosen bullets together should show each one the CV supports.",
+      "- Prefer hands-on technical work (things the candidate built, trained, analyzed or shipped) that uses the posting's tools and methods. Choose writing, policy or historical research only when the posting asks for that kind of work, never to fill space.",
       "- Order the bullets most relevant first; the resume lists the jobs and projects in the order their first bullet appears. Set source_id to the bullet's ID exactly as written, without brackets. Use each ID once; never invent one.",
       "- After you answer, the system fills any space left on the page with further CV bullets, and trims the least relevant ones if the page overflows.",
       "Bullet text: follow the wording rule in the message below. Never add tools, technologies, numbers, results, team sizes or names the source bullet doesn't state, even if the posting asks for them. Leave out the ID and the (usual) mark.",
@@ -214,5 +215,21 @@
       "Leave out headers, page numbers and anything that isn't part of the resume. If a section is empty in the document, leave it empty."
     ],
     "human": "Resume or CV text:\n{document}"
+  },
+  "suggest_companies": {
+    "system": [
+      "You help a student find companies to follow for internships and new-graduate jobs, in the fields they describe.",
+      "List real companies that work in those fields and hire interns or new graduates in the United States. Prefer startups, scale-ups and mid-size companies, which usually post their jobs on Greenhouse, Lever or Ashby; leave out very large companies that run their own careers sites.",
+      "Cover the whole range of the fields described: for a broad field, include its main areas (for example, for health care: biotech, medical devices, diagnostics, digital health, health data).",
+      "Give each company's usual name only, spelled as the company writes it, without 'Inc.' or locations. Never invent a company; if unsure a company exists, leave it out. List each company once, most relevant first."
+    ],
+    "human": "Fields I'm interested in: {interests}\n\nList up to {n} companies."
+  },
+  "pick_industries": {
+    "system": [
+      "You sort a student's description of the fields they want to work in into industries from a fixed list.",
+      "Choose every industry from the list that the description covers, and only those. A broad description can cover several (for example, \"healthcare\" covers biotech, diagnostics, medical devices and digital health)."
+    ],
+    "human": "Industries: {industries}\n\nDescription: {interests}"
   }
 }

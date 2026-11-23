@@ -19,10 +19,11 @@
 
 	const pages: Item[] = [
 		['Today', '/'], ['Jobs', '/jobs'], ['Runway', '/runway'], ['Applications', '/applications'], ['Runs', '/runs'],
-		['Master CV', '/cv'], ['Settings', '/settings/profile'], ['Models', '/settings/models'], ['Resume templates', '/settings/templates'], ['Activity', '/activity']
+		['Master CV', '/cv'], ['Settings', '/settings/profile'], ['Models', '/settings/models'], ['Resume templates', '/settings/templates'], ['Activity', '/activity'], ['Command line', '/terminal']
 	].map(([label, href]) => ({ label, hint: 'Go to', run: () => goto(href) }));
 
 	const actions: Item[] = [
+		{ label: 'Open the command line', hint: 'Go to', run: () => goto('/terminal') },
 		{ label: 'Add jobs or emails', hint: 'A', run: () => onadd() },
 		{ label: 'Run the whole pipeline', hint: 'Task', run: () => start('run') },
 		{ label: 'Fetch job boards', hint: 'Task', run: () => start('fetch') },
@@ -35,18 +36,31 @@
 	async function start(cmd: string) {
 		try {
 			await command(cmd);
-			toasts.show(`Started: ${cmd}`);
+			toasts.show(`Started: ${cmd}. Its output is on the Command line page.`);
 		} catch (e) {
 			toasts.show(e instanceof ApiError ? e.message : 'Could not start it.', 'error');
 		}
 	}
+
+	// First words of commands the command line accepts (e.g. "rank", "jobs"), loaded once.
+	let commandWords = $state<Set<string>>(new Set());
+	$effect(() => {
+		if (open && !commandWords.size)
+			get<{ command: string }[]>('/commands').then((c) => (commandWords = new Set(c.map((x) => x.command.split(' ')[0])))).catch(() => {});
+	});
 
 	const items = $derived.by(() => {
 		const q = query.trim().toLowerCase();
 		const match = (i: Item) => !q || i.label.toLowerCase().includes(q);
 		const out: Item[] = [...actions.filter(match), ...pages.filter(match)];
 		for (const j of jobs) out.push({ label: `${j.company} · ${j.title}`, hint: 'Job', run: () => goto(`/jobs/${encodeURIComponent(j.id)}`) });
-		if (q) out.push({ label: `autotailor ${query.trim().replace(/^autotailor\s+/, '')}`, hint: 'Run command', run: () => start(query.trim()) });
+		if (q) {
+			const text = query.trim().replace(/^autotailor\s+/, '');
+			const cmd: Item = { label: `autotailor ${text}`, hint: 'Run command', run: () => start(text) };
+			// A command with arguments (or typed as "autotailor ...") goes first; otherwise last.
+			const looksLikeCommand = /^autotailor\s/i.test(query.trim()) || (commandWords.has(text.split(/\s+/)[0]) && /\s/.test(text));
+			looksLikeCommand ? out.unshift(cmd) : out.push(cmd);
+		}
 		return out;
 	});
 

@@ -175,9 +175,10 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
 
         matches = db.all_matches(conn)
         counts = db.table_counts(conn)
+        cut = {i for i, m in matches.items() if matching.is_cut(m, settings.run)}
         return {
-            "counts": {**counts, **{v.value: sum(m.verdict == v for m in matches.values()) for v in Verdict},
-                       "not_screened": counts["postings"] - len(matches)},
+            "counts": {**counts, **{v.value: sum(m.verdict == v for i, m in matches.items() if i not in cut) for v in Verdict},
+                       "not_screened": counts["postings"] - len(matches), "cut": len(cut)},
             "mode": settings.models.mode(),
             "models": {s: {"provider": (m := settings.models.for_step(s)).provider, "model": m.model, "local": m.is_local}
                        for s in STEPS},
@@ -242,7 +243,7 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
         return {"ok": True}
 
     @app.get("/api/postings/{posting_id}/resume.png")
-    def resume_png(posting_id: str, request: Request, conn=Depends(_conn)) -> Response:  # noqa: ANN001
+    def resume_png(posting_id: str, request: Request, conn=Depends(_conn), scale: float = 1.6) -> Response:  # noqa: ANN001
         from autotailor.models import ArtifactKind
         from autotailor.resume.render import pdf_to_png
 
@@ -250,7 +251,8 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
         f = _paths(request).outputs / _need(pdf, "resume for this posting")["path"]
         if not f.exists():
             raise HTTPException(404, "The resume file is missing.")
-        return Response(pdf_to_png(f.read_bytes()), media_type="image/png")
+        scale = min(max(scale, 1.0), 3.0)  # 3 is sharp enough for a full-screen view
+        return Response(pdf_to_png(f.read_bytes(), scale=scale), media_type="image/png", headers={"Cache-Control": "no-store"})
 
     # runs and files
 
@@ -290,6 +292,11 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
         return FileResponse(f, filename=f.name)
 
     # tasks
+
+    @app.get("/api/commands")
+    def commands() -> list[dict]:
+        """What the command line accepts (AutoTailor's own commands, never a shell)."""
+        return tasks.command_help()
 
     @app.get("/api/tasks")
     def task_list(conn=Depends(_conn), limit: int = 20) -> list[dict]:  # noqa: ANN001

@@ -51,6 +51,18 @@ def main() -> None:
     conn = db.connect(home / "data" / "autotailor.db")
     _store(conn, "lever:e2e-a", "Perception Intern", 0.86, company="Northwind Robotics", location="Pittsburgh, PA")
     _store(conn, "lever:e2e-b", "Data Science Intern", 0.71, company="Acme Analytics", location="Remote")
+    # A tailored resume for the first job (Resume tab, viewer and editor).
+    from test_m4_resume import CV, _verbatim
+
+    from autotailor.resume.output import Style, write_outputs
+
+    run_id = db.start_run(conn, "{}")
+    outputs = home / "data" / "outputs"
+    w = write_outputs(outputs / "e2e-run", 1, db.get_posting(conn, "lever:e2e-a"), None,
+                      _verbatim("exp-lab-detector", "proj-ocr"), CV, style=Style("typst", fill_page=False))  # fmt: skip
+    for kind, path in (("resume_pdf", w.pdf), ("resume_docx", w.docx), ("resume_data", w.data)):
+        db.add_artifact(conn, run_id, "lever:e2e-a", kind, str(path.relative_to(outputs)), "test")
+    conn.commit()
     conn.close()
 
     from autotailor.api import api_token

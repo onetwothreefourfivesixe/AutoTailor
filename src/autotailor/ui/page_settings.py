@@ -131,6 +131,9 @@ def render() -> None:
         so["title_include"] = lines(c1.text_area("Keep titles containing (one per line; empty keeps all)",
                                                  "\n".join(so["title_include"]), key=_k("inc")))  # fmt: skip
         so["title_exclude"] = lines(c2.text_area("Drop titles containing", "\n".join(so["title_exclude"]), key=_k("exc")))
+        so["max_age_days"] = int(st.number_input("Skip postings older than (days; 0 for no cutoff)", min_value=0,
+                                                 value=int(so.get("max_age_days", 21)), key=_k("age")))  # fmt: skip
+        so["keep_undated"] = st.checkbox("Keep postings with no publish date", so.get("keep_undated", True), key=_k("undated"))
         st.caption("LinkedIn, Handshake, Runway, Indeed and Glassdoor are never fetched; paste those postings with `autotailor add`.")
 
     with tabs[4]:

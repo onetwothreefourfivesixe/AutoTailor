@@ -112,3 +112,42 @@ test('setup wizard: models, CV from a file, about you, job boards', async ({ pag
 	await open(page, '/settings/sources');
 	await expect(page.getByLabel(/greenhouse/i)).toHaveValue(/stripe/);
 });
+
+test('a tailored resume: enlarge it, edit a bullet, save, restore', async ({ page }) => {
+	await open(page, '/jobs/lever%3Ae2e-a?tab=resume');
+	await page.getByRole('button', { name: 'Open the resume full size, with editing' }).click();
+	const viewer = page.getByRole('dialog', { name: 'Resume' });
+	await expect(viewer.getByAltText('The tailored resume, full size')).toBeVisible();
+	await viewer.getByRole('button', { name: 'Edit' }).click();
+	await expect(viewer.getByLabel('Bullet text')).toHaveCount(2);
+	await viewer.getByLabel('Remove bullet').last().click();
+	await viewer.getByLabel('Bullet text').first().fill('Trained a YOLO-based object detector in PyTorch on 12k labeled warehouse images');
+	await viewer.getByRole('button', { name: 'Use CV wording' }).waitFor();
+	await viewer.getByRole('button', { name: 'Save and re-render' }).click();
+	await expect(page.getByText('The PDF and Word files are updated')).toBeVisible({ timeout: 30_000 });
+	await expect(viewer.getByRole('heading', { name: 'Resume (edited by you)' })).toBeVisible();
+	page.once('dialog', (d) => d.accept());
+	await viewer.getByRole('button', { name: 'Restore tailored version' }).click();
+	await expect(page.getByText('Restored the tailored version.')).toBeVisible({ timeout: 30_000 });
+	await expect(viewer.getByRole('heading', { name: 'Resume', exact: true })).toBeVisible();
+});
+
+test('command line: run a command and see its output; jobs can be fit-scored', async ({ page }) => {
+	await open(page, '/terminal');
+	await page.getByLabel('Command', { exact: true }).fill('jobs list');
+	await page.keyboard.press('Enter');
+	const output = page.getByRole('log', { name: 'Command output' });
+	await expect(output).toContainText('lever:e2e-a', { timeout: 60_000 });
+	await expect(output).toContainText('done');
+	await page.getByLabel('Command', { exact: true }).fill('nonsense');
+	await page.keyboard.press('Enter');
+	await expect(output).toContainText('Unknown command');
+	await page.getByRole('button', { name: 'Commands' }).click();
+	await expect(page.getByRole('button', { name: 'discover', exact: true })).toBeVisible();
+
+	await open(page, '/jobs');
+	await page.locator('tbody tr').first().getByRole('checkbox').check();
+	await expect(page.getByRole('button', { name: 'Score fit' })).toBeVisible();
+	await open(page, '/jobs/lever%3Ae2e-a');
+	await expect(page.getByRole('button', { name: /Score fit/ })).toBeEnabled();
+});

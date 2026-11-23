@@ -162,6 +162,25 @@
 	let customAts = $state('greenhouse');
 	let customSlug = $state('');
 	const shown = $derived(data.boards.filter((b) => !boardQuery || b.name.toLowerCase().includes(boardQuery.toLowerCase())));
+	// Find companies for the fields described in your own words (catalog + optional model suggestions).
+	type Found = { name: string; ats: string; slug: string; jobs: number; following: boolean; from_model: boolean };
+	// svelte-ignore state_referenced_locally
+	let fields = $state((data.settings.profile?.role_interests ?? []).join(', '));
+	let askModel = $state(false);
+	let searching = $state(false);
+	let found = $state<{ industries: string[]; boards: Found[]; not_found: string[]; model: string; local: boolean } | null>(null);
+	async function findCompanies() {
+		searching = true;
+		try {
+			found = await send('POST', '/setup/discover', { text: fields, ask_model: askModel });
+			chosen = new Set([...chosen, ...found!.boards.map((b) => `${b.ats}:${b.slug}`)]);
+			toasts.show(`Found ${found!.boards.length} companies; they're selected below.`);
+		} catch (e) {
+			fail(e);
+		} finally {
+			searching = false;
+		}
+	}
 	function toggleBoard(id: string) {
 		const c = new Set(chosen);
 		c.has(id) ? c.delete(id) : c.add(id);
@@ -398,6 +417,30 @@
 				<p class="text-sm text-muted">These companies post on public job boards AutoTailor can read. Big companies with their own careers sites (Google, Apple, …) aren't here: paste those postings with Add.</p>
 			</div>
 			<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={internships} /> I'm looking for internships (keep only intern, internship and co-op titles)</label>
+			<div class="space-y-2 rounded-lg border border-line p-4">
+				<label class="block"><span class="label">What fields or industries interest you? Describe them in your own words.</span>
+					<input class="input" bind:value={fields} placeholder="e.g. biomedical, medical devices, health data" onkeydown={(e) => e.key === 'Enter' && fields.trim() && !searching && findCompanies()} /></label>
+				<div class="flex flex-wrap items-center gap-3">
+					<button class="btn btn-primary" disabled={searching || fields.trim().length < 3} onclick={findCompanies}>{searching ? 'Searching…' : 'Find companies'}</button>
+					<label class="flex items-center gap-2 text-sm text-muted"><input type="checkbox" bind:checked={askModel} /> Also ask the AI for more companies (slower; each is checked before it's listed)</label>
+				</div>
+				{#if searching}<p class="text-xs text-muted">Checking each company's job board for open jobs. This takes up to a minute{askModel ? ', longer with the AI' : ''}.</p>{/if}
+				{#if found}
+					<p class="text-sm">Found <b>{found.boards.length}</b> companies with job boards in: {found.industries.join(', ') || 'no matching industry'}. They're selected; untick any you don't want.</p>
+					{#if found.boards.length}
+						<div class="grid max-h-72 gap-1 overflow-y-auto rounded-lg border border-line p-2 sm:grid-cols-2">
+							{#each found.boards as b (b.ats + b.slug)}
+								<label class="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-sunken">
+									<input type="checkbox" checked={chosen.has(`${b.ats}:${b.slug}`)} onchange={() => toggleBoard(`${b.ats}:${b.slug}`)} />
+									<span class="min-w-0 flex-1 truncate">{b.name}</span>
+									{#if b.from_model}<span class="rounded bg-sunken px-1.5 text-xs text-muted" title="Suggested by the AI, then checked">AI</span>{/if}
+									<span class="text-xs text-muted tabular-nums">{b.jobs} open</span>
+								</label>
+							{/each}
+						</div>
+					{/if}
+				{/if}
+			</div>
 			<div class="flex flex-wrap items-center gap-2">
 				<input class="input max-w-xs" placeholder="Search companies" bind:value={boardQuery} aria-label="Search companies" />
 				<button class="btn btn-sm" onclick={() => (chosen = new Set([...chosen, ...shown.map((b) => `${b.ats}:${b.slug}`)]))}>Select {boardQuery ? 'these' : 'all'}</button>

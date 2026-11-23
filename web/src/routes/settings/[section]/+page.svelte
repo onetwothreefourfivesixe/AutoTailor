@@ -132,7 +132,27 @@
 				{#each [['jobs_per_run', 'Resumes per run (top X)'], ['max_runs_per_day', 'Runs per day, at most'], ['max_runs_per_week', 'Runs per 7 days, at most'], ['shortlist_size', 'Postings fit-scored per run'], ['parallel_jobs', 'Resumes tailored at once']] as [k, label] (k)}
 					<label><span class="label">{label}</span><input class="input" type="number" min="1" bind:value={s.run[k]} /></label>
 				{/each}
-				<label><span class="label">Minimum fit score: {Number(s.run.min_fit_score).toFixed(2)}</span><input type="range" min="0" max="1" step="0.05" bind:value={s.run.min_fit_score} class="w-full" /></label>
+				<label><span class="label">Minimum fit score to tailor: {Number(s.run.min_fit_score).toFixed(2)}</span><input type="range" min="0" max="1" step="0.05" bind:value={s.run.min_fit_score} class="w-full" /></label>
+				<div class="space-y-2 sm:col-span-2">
+					<label class="flex items-start gap-2 text-sm"><input type="checkbox" bind:checked={s.run.cut_low_fit} />
+						<span>Cut jobs that score below the cut-off <span class="block text-xs text-muted">Never tailored, and left out of Jobs and Today. Jobs not scored yet are never cut, nor ones you tailored, applied to or added questions for. The Jobs page's “Cut” view lists them.</span></span></label>
+					{#if s.run.cut_low_fit}
+						<label class="block pl-6 text-sm"><span class="label">What cutting does</span>
+							<select class="input max-w-md" bind:value={s.run.cut_action}>
+								<option value="delete">Delete them (keeps the database small; they aren't fetched again)</option>
+								<option value="hide">Hide them (kept in the database)</option>
+							</select></label>
+						<label class="flex flex-wrap items-center gap-2 pl-6 text-sm">
+							<input type="checkbox" checked={s.run.cut_below != null} onchange={(e) => (s.run.cut_below = e.currentTarget.checked ? Math.min(Number(s.run.min_fit_score), 0.4) : null)} />
+							<span>Use a different cut-off than the minimum fit score</span>
+							{#if s.run.cut_below != null}
+								<input type="range" min="0" max="1" step="0.05" bind:value={s.run.cut_below} class="w-40" aria-label="Cut-off" />
+								<span class="tabular-nums">{Number(s.run.cut_below).toFixed(2)}</span>
+							{/if}
+						</label>
+						<p class="pl-6 text-xs text-muted">Cutting below {Number(s.run.cut_below ?? s.run.min_fit_score).toFixed(2)}. A lower cut-off than the tailoring minimum keeps near misses in view.</p>
+					{/if}
+				</div>
 				<h2 class="font-semibold sm:col-span-2">Tailored resumes</h2>
 				{#each [['min_bullets', 'Fewest bullets'], ['max_bullets', 'Most bullets the model picks'], ['max_attempts', 'Drafts before giving up']] as [k, label] (k)}
 					<label><span class="label">{label}</span><input class="input" type="number" min="1" bind:value={s.tailor[k]} /></label>

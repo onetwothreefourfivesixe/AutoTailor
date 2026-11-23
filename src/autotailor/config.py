@@ -84,7 +84,21 @@ class RunSettings(_Model):
     jobs_per_run: int = Field(default=10, ge=1, description="Resumes tailored per run (top X).")
     max_runs_per_day: int = Field(default=3, ge=1, description="Tailoring runs allowed per calendar day.")
     max_runs_per_week: int = Field(default=10, ge=1, description="Tailoring runs allowed in any 7 days.")
-    min_fit_score: float = Field(default=0.6, ge=0.0, le=1.0)
+    min_fit_score: float = Field(default=0.6, ge=0.0, le=1.0, description="Only postings at or above this fit score are tailored.")
+    cut_low_fit: bool = Field(
+        default=True,
+        description="Cut postings whose fit score is below the cut-off. Postings not yet fit-scored are never cut, "
+        "nor ones you tailored, applied to, overrode or added questions for.",
+    )
+    cut_action: Literal["delete", "hide"] = Field(
+        default="delete",
+        description="'delete': remove cut postings from the database (a small record keeps them from being fetched "
+        "again; the jobs list's Cut view lists them); 'hide': keep them stored but out of the jobs list and Today.",
+    )
+    cut_below: float | None = Field(
+        default=None, ge=0.0, le=1.0,
+        description="The cut-off; empty uses min_fit_score. Set it lower to keep near misses in view without tailoring them.",
+    )  # fmt: skip
     shortlist_size: int = Field(
         default=25,
         ge=1,
@@ -128,6 +142,19 @@ class SourceSettings(_Model):
     title_include: list[str] = Field(default_factory=list)
     # Drop a board posting whose title contains any of these terms.
     title_exclude: list[str] = Field(default_factory=list)
+    max_age_days: int = Field(
+        default=21, ge=0,
+        description="Skip board postings first published more than this many days ago, and leave stored "
+        "postings that have aged past it out of ranking and tailoring. 0 turns the cutoff off.",
+    )  # fmt: skip
+    keep_undated: bool = Field(
+        default=True, description="Keep postings that don't say when they were published (the cutoff can't apply)."
+    )
+    delete_expired: bool = Field(
+        default=True,
+        description="Delete stored postings older than max_age_days (by publish date, or by when they were first "
+        "pulled if undated) at every fetch and rank, keeping ones you tailored, applied to or added questions for.",
+    )
     # company slug lists per ATS, e.g. greenhouse = ["figma", "scaleai"]
     greenhouse: list[str] = Field(default_factory=list)
     lever: list[str] = Field(default_factory=list)

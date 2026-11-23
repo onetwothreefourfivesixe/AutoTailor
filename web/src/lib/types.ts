@@ -125,6 +125,9 @@ export interface JobDetail {
 }
 
 export interface ResumeView {
+	edited: boolean;
+	cv_bullets: { id: string; text: string; entry: string }[];
+	cv_skills: { name: string; items: string[] }[];
 	run_id: number;
 	model: string | null;
 	created_at: string;

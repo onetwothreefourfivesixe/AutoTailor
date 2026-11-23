@@ -24,7 +24,8 @@
 		{ href: '/runs', label: 'Runs' },
 		{ href: '/cv', label: 'Master CV' },
 		{ href: '/settings/profile', label: 'Settings', match: '/settings' },
-		{ href: '/activity', label: 'Activity' }
+		{ href: '/activity', label: 'Activity' },
+		{ href: '/terminal', label: 'Command line' }
 	];
 
 	const signedIn = $derived(page.url.pathname !== '/login');

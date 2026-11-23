@@ -21,6 +21,12 @@ from autotailor.llm import API_KEY_ENV
 SETUP_DONE = "setup_done"
 
 
+class DiscoverIn(BaseModel):
+    text: str
+    ask_model: bool = True
+    n: int = 40
+
+
 class KeyIn(BaseModel):
     provider: Literal["anthropic", "openai", "google_genai"]
     key: str
@@ -121,11 +127,40 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         return {"keys": keys_present(p.env)}
 
     @app.get("/api/setup/boards")
-    def boards(settings: Settings = Depends(_settings)) -> dict:
-        """Company job boards known to work, and which ones you already follow."""
-        suggested = json.loads((resources.files("autotailor.sources") / "suggested_boards.json").read_text(encoding="utf-8"))
+    def boards(request: Request, settings: Settings = Depends(_settings)) -> dict:
+        """Company job boards known to work (the catalog, with boards learned from earlier
+        searches), and which ones you already follow."""
+        from autotailor.sources.discover import LEARNED, catalog
+
+        suggested = sorted(catalog(_paths(request).data / LEARNED), key=lambda b: b["name"].lower())
         mine = {(a, s) for a in ("greenhouse", "lever", "ashby") for s in getattr(settings.sources, a)}
         return {"boards": [{**b, "following": (b["ats"], b["slug"]) in mine} for b in suggested]}
+
+    @app.post("/api/setup/discover")
+    def discover(body: DiscoverIn, request: Request, settings: Settings = Depends(_settings)) -> dict:
+        """Companies in the fields described (in the user's words) whose job boards exist on
+        Greenhouse, Lever or Ashby, with their open jobs. Only the description is sent to the model."""
+        from autotailor.sources import make_client
+        from autotailor.sources.discover import LEARNED
+        from autotailor.sources.discover import discover as run
+
+        text = body.text.strip()
+        if len(text) < 3:
+            raise HTTPException(422, "Describe the fields you're interested in, e.g. “biomedical engineering, medical devices”.")
+        mine = {(a, s) for a in ("greenhouse", "lever", "ashby") for s in getattr(settings.sources, a)}
+        try:
+            with make_client() as client:
+                d = run(text, settings, client, ask_model=body.ask_model, n=max(10, min(body.n, 100)),
+                        store=_paths(request).data / LEARNED)
+        except Exception as e:  # model unavailable, missing key, invalid output
+            raise HTTPException(502, f"The model couldn't help with that: {type(e).__name__}: {e}") from e
+        spec = settings.models.for_step("extract")
+        return {
+            "industries": d.industries,
+            "boards": [{"name": b.name, "ats": b.ats, "slug": b.slug, "jobs": b.jobs, "following": (b.ats, b.slug) in mine,
+                        "from_model": b.name in d.from_model} for b in d.boards],
+            "not_found": d.not_found, "model": f"{spec.provider}:{spec.model}", "local": spec.is_local,
+        }  # fmt: skip
 
     @app.post("/api/setup/cv")
     def import_cv(request: Request, file: UploadFile = File(...), settings: Settings = Depends(_settings)) -> dict[str, Any]:

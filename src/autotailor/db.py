@@ -14,7 +14,7 @@ from pathlib import Path
 from autotailor.dedupe import dedupe_key, locations_compatible, normalize_url
 from autotailor.models import FitAssessment, JobPosting, Match, PostingStatus, Requirements, Verdict
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS postings (
@@ -213,6 +213,23 @@ CREATE TABLE IF NOT EXISTS application_events (
 CREATE INDEX IF NOT EXISTS idx_app_events ON application_events (posting_id);
 """
 
+# Postings deleted to keep the database small (below the fit cut-off, or too old). Only this
+# small record stays, so fetching or pasting the same posting again doesn't bring it back.
+_SCHEMA_V8 = """
+CREATE TABLE IF NOT EXISTS cut_postings (
+    id            TEXT PRIMARY KEY,
+    url_key       TEXT,
+    company       TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    location      TEXT,
+    canonical_url TEXT,
+    fit_score     REAL,
+    reason        TEXT NOT NULL,                 -- low_fit | too_old
+    cut_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cut_url_key ON cut_postings (url_key);
+"""
+
 _MIGRATIONS = {
     1: (_SCHEMA_V1, None),
     2: (_SCHEMA_V2, _backfill_v2),
@@ -221,6 +238,7 @@ _MIGRATIONS = {
     5: (_SCHEMA_V5, None),
     6: (_SCHEMA_V6, None),
     7: (_SCHEMA_V7, None),
+    8: (_SCHEMA_V8, None),
 }
 
 
@@ -831,3 +849,60 @@ def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
         t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # noqa: S608 (fixed names)
         for t in ("postings", "matches", "runs", "artifacts")
     }
+
+
+# --- cutting postings (keeps the database small) ------------------------------------------------
+
+
+def protected_ids(conn: sqlite3.Connection) -> set[str]:
+    """Postings never cut: ones with a resume, an application, questions or a verdict override."""
+    out: set[str] = set()
+    for table in ("artifacts", "applications", "questions", "overrides"):
+        out |= {r[0] for r in conn.execute(f"SELECT DISTINCT posting_id FROM {table}")}  # noqa: S608 (fixed names)
+    return out
+
+
+def cut_postings(conn: sqlite3.Connection, cuts: dict[str, tuple[str, float | None]]) -> int:
+    """Delete postings {id: (reason, fit score)} with everything stored for them, keeping a
+    small record of each so they aren't fetched again. Returns how many were deleted."""
+    n = 0
+    for pid, (reason, fit) in cuts.items():
+        row = conn.execute("SELECT * FROM postings WHERE id = ?", (pid,)).fetchone()
+        if row is None:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO cut_postings (id, url_key, company, title, location, canonical_url, fit_score,"
+            " reason, cut_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (pid, row["url_key"], row["company"], row["title"], row["location"], row["canonical_url"], fit, reason, _now()),
+        )
+        conn.execute("DELETE FROM embeddings WHERE key = ?", (f"posting:{pid}",))
+        conn.execute("UPDATE runway_roles SET posting_id = NULL, status = 'skipped' WHERE posting_id = ?", (pid,))
+        conn.execute("DELETE FROM postings WHERE id = ?", (pid,))  # matches etc. go with it (ON DELETE CASCADE)
+        n += 1
+    conn.commit()
+    return n
+
+
+def was_cut(conn: sqlite3.Connection, p: JobPosting) -> bool:
+    """Whether this posting (same ID or same link) was cut before."""
+    if conn.execute("SELECT 1 FROM cut_postings WHERE id = ?", (p.id,)).fetchone():
+        return True
+    key = normalize_url(p.canonical_url)
+    return bool(key and conn.execute("SELECT 1 FROM cut_postings WHERE url_key = ?", (key,)).fetchone())
+
+
+def list_cut(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM cut_postings ORDER BY cut_at DESC, company").fetchall()
+
+
+def uncut(conn: sqlite3.Connection, posting_id: str) -> bool:
+    """Forget a cut, so the posting can be fetched or added again."""
+    cur = conn.execute("DELETE FROM cut_postings WHERE id = ?", (posting_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def compact(conn: sqlite3.Connection) -> None:
+    """Give the space of deleted rows back to the disk (SQLite keeps it otherwise)."""
+    conn.commit()
+    conn.execute("VACUUM")

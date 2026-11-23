@@ -40,6 +40,7 @@ COMMANDS: dict[str, list[str]] = {
     "screen": ["screen"],
     "rank": ["rank"],
     "tailor": ["tailor"],
+    "prune": ["prune"],
     "resume": ["resume"],
     "answers": ["answers", "run", "--no-ask"],
     "run": ["run"],
@@ -48,7 +49,7 @@ COMMANDS: dict[str, list[str]] = {
 LABELS = {
     "fetch": "Fetch job boards", "mail": "Import Runway emails", "resolve": "Match Runway roles",
     "screen": "Screen eligibility", "rank": "Rank", "tailor": "Tailor resumes", "resume": "Resume a run",
-    "answers": "Suggest answer points", "run": "Whole pipeline", "cli": "autotailor",
+    "answers": "Suggest answer points", "prune": "Delete low-fit and old postings", "run": "Whole pipeline", "cli": "autotailor",
 }  # fmt: skip
 
 
@@ -58,7 +59,7 @@ LABELS = {
 # and flags added so the command never waits for keyboard input (the worker has none).
 ALLOWED: dict[str, dict[str | None, list[str]]] = {
     "fetch": {None: []}, "add": {None: []}, "screen": {None: []}, "rank": {None: []},
-    "shortlist": {None: []}, "tailor": {None: []}, "resume": {None: []}, "runs": {None: []}, "run": {None: []},
+    "shortlist": {None: []}, "tailor": {None: []}, "prune": {None: []}, "discover": {None: []}, "resume": {None: []}, "runs": {None: []}, "run": {None: []},
     "models": {None: []}, "doctor": {None: []}, "compare": {None: []},
     "jobs": {"list": [], "show": []},
     "runway": {"list": [], "resolve": ["--auto"], "answer": []},
@@ -74,6 +75,26 @@ NOT_HERE = {
     "mail login": "it asks for a password: run it in a terminal",
     "mail listen": "it runs until stopped: run it in a terminal",
 }
+
+
+def command_help() -> list[dict[str, str]]:
+    """The commands the UI's command line accepts, each with the first line of its help."""
+    import typer.main
+
+    from autotailor.cli import app
+
+    group = typer.main.get_command(app)
+    out = []
+    for top, subs in sorted(ALLOWED.items()):
+        cmd = group.commands.get(top)  # type: ignore[attr-defined]
+        if cmd is None:
+            continue
+        names = [top] if None in subs else [f"{top} {s}" for s in subs if s]
+        for name in names:
+            sub = getattr(cmd, "commands", {}).get(name.split(" ", 1)[1]) if " " in name else cmd
+            text = (getattr(sub, "help", None) or "").strip().splitlines()
+            out.append({"command": name, "help": text[0] if text else ""})
+    return out
 
 
 def parse_command(text: str) -> list[str]:

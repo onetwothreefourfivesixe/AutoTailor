@@ -142,7 +142,8 @@ def test_cv_import_endpoint(client, monkeypatch):
 
 def test_suggested_boards(client):
     boards = client.get("/api/setup/boards").json()["boards"]
-    assert len(boards) > 100 and {"name": "Stripe", "ats": "greenhouse", "slug": "stripe", "following": False} in boards
+    stripe = {"name": "Stripe", "ats": "greenhouse", "slug": "stripe", "industries": ["fintech"], "following": False}
+    assert len(boards) > 250 and stripe in boards
 
 
 def test_ui_initialises_a_new_folder(tmp_path, monkeypatch):

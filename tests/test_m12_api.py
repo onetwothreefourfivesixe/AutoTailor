@@ -56,6 +56,8 @@ def test_bulk_actions(client):
     assert [j["id"] for j in client.get("/api/jobs").json()] == ["lever:b"]
     assert [j["id"] for j in client.get("/api/jobs?hidden=true").json()] == ["lever:a"]
     t = client.post("/api/jobs/bulk", json={"ids": ["lever:b", "nope:1"], "action": "tailor"}).json()["task"]
+    s = client.post("/api/jobs/bulk", json={"ids": ["lever:b"], "action": "score"}).json()["task"]
+    assert s["args_json"] == '["rank", "lever:b"]'
     assert t["args_json"] == '["tailor", "lever:b", "--force"]'  # picked by hand: redo even if tailored
     assert client.post("/api/jobs/bulk", json={"ids": ["nope:1"], "action": "hide"}).status_code == 422
 
@@ -152,3 +154,73 @@ def test_events_stream_first_snapshot(client, monkeypatch):
             if {"tasks", "needs", "runs", "postings"} <= seen and line.startswith("data: "):
                 break
     assert '"kind": "screen"' in text and '"count": 2' in text
+
+
+def test_edit_and_restore_a_tailored_resume(client, monkeypatch):
+    from test_m4_resume import SRC
+
+    _tailor(client, monkeypatch)
+    before = client.get("/api/jobs/lever:a/resume").json()
+    assert before["edited"] is False and any(b["id"] == "proj-budget" for b in before["cv_bullets"])
+    assert before["cv_skills"] and client.get("/api/postings/lever:a/resume.png?scale=3").status_code == 200
+
+    edit = {"bullets": [{"source_id": "proj-budget", "text": SRC["proj-budget"].text},
+                        {"source_id": "exp-lab-detector", "text": SRC["exp-lab-detector"].text + " for 12 robots"}],
+            "skills": ["pytorch"]}  # fmt: skip
+    r = client.put("/api/jobs/lever:a/resume", json=edit).json()
+    assert r["pages"] == 1 and any("12" in w for w in r["warnings"])  # a number the CV doesn't have: a note, not an error
+    after = client.get("/api/jobs/lever:a/resume").json()
+    assert after["edited"] and [b["source_id"] for b in after["bullets"]] == ["proj-budget", "exp-lab-detector"]
+    assert after["skills"] == ["PyTorch"]
+
+    assert client.put("/api/jobs/lever:a/resume", json={**edit, "skills": ["Rust"]}).status_code == 422
+    assert client.put("/api/jobs/lever:a/resume", json={"bullets": [{"source_id": "nope", "text": "x"}]}).status_code == 422
+    dup = {"bullets": [edit["bullets"][0], edit["bullets"][0]]}
+    assert client.put("/api/jobs/lever:a/resume", json=dup).status_code == 422
+
+    assert client.post("/api/jobs/lever:a/resume/restore").status_code == 200
+    restored = client.get("/api/jobs/lever:a/resume").json()
+    assert not restored["edited"] and [b["source_id"] for b in restored["bullets"]] == [b["source_id"] for b in before["bullets"]]
+    assert client.post("/api/jobs/lever:a/resume/restore").status_code == 404
+
+
+def test_low_fit_and_old_postings_are_deleted_but_protected_ones_stay(client, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from autotailor import matching
+    from autotailor.config import Settings
+    conn = db.connect(client.home / "data" / "autotailor.db")
+    _store(conn, "lever:low", "Accounting Intern", 0.3)
+    _store(conn, "lever:low-applied", "Sales Intern", 0.2)
+    db.set_application(conn, "lever:low-applied", "applied")
+    _store(conn, "lever:old", "Old Intern", 0.95)
+    long_ago = (datetime.now(UTC) - timedelta(days=60)).isoformat(timespec="seconds")
+    conn.execute("UPDATE postings SET posted_at = ? WHERE id = 'lever:old'", (long_ago,))
+    conn.commit()
+
+    s = Settings()
+    s.run.cut_action = "hide"  # hidden, not deleted: out of the list, shown in the Cut view
+    assert matching.prune(conn, s.model_copy(update={"sources": s.sources.model_copy(update={"delete_expired": False})})) == {"low_fit": 0, "too_old": 0}
+    r = client.get("/api/jobs")
+    ids = [j["id"] for j in r.json()]
+    assert "lever:low" not in ids and r.headers["X-Cut-Count"] == "2"
+    assert {j["id"] for j in client.get("/api/jobs?cut=true").json()} == {"lever:low", "lever:low-applied"}
+
+    counts = matching.prune(conn, Settings())  # the defaults: delete low fit and too old
+    assert counts == {"low_fit": 1, "too_old": 1}
+    assert db.get_posting(conn, "lever:low") is None and db.get_posting(conn, "lever:old") is None
+    assert db.get_posting(conn, "lever:low-applied") is not None  # applied: never deleted
+    assert db.get_posting(conn, "lever:a") is not None  # 0.9 fit, recent
+    assert conn.execute("SELECT COUNT(*) FROM embeddings WHERE key = 'posting:lever:low'").fetchone()[0] == 0
+
+    deleted = {d["id"]: d for d in client.get("/api/cut").json()}
+    assert deleted["lever:low"]["reason"] == "low_fit" and deleted["lever:old"]["reason"] == "too_old"
+    assert client.get("/api/jobs").headers["X-Cut-Count"] == "3"  # 2 deleted + the applied one, hidden
+    from autotailor.models import JobPosting, Source
+
+    again = JobPosting(id="lever:low", source=Source.LEVER, source_ref="low", company="Acme", title="Accounting Intern")
+    assert db.was_cut(conn, again)
+    assert client.delete("/api/cut/lever:low").status_code == 200 and not db.was_cut(conn, again)
+    assert client.delete("/api/cut/lever:low").status_code == 404
+    db.compact(conn)
+    conn.close()

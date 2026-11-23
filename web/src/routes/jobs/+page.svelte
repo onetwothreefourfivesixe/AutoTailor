@@ -21,7 +21,8 @@
 		{ label: 'Resume ready', params: { has_resume: 'true', applied: 'false' } },
 		{ label: 'Unclear', params: { verdict: 'unclear' } },
 		{ label: 'Applied', params: { applied: 'true' } },
-		{ label: 'Hidden', params: { hidden: 'true' } }
+		{ label: 'Hidden', params: { hidden: 'true' } },
+		{ label: 'Cut', params: { cut: 'true' } }
 	];
 
 	function setParams(changes: Record<string, string | null>, reset = false) {
@@ -34,7 +35,7 @@
 	}
 
 	const viewActive = (params: Record<string, string>) => {
-		const keys = ['verdict', 'has_resume', 'applied', 'hidden'];
+		const keys = ['verdict', 'has_resume', 'applied', 'hidden', 'cut'];
 		return keys.every((k) => (page.url.searchParams.get(k) ?? '') === (params[k] ?? ''));
 	};
 
@@ -54,7 +55,8 @@
 		if (!ids.length) return;
 		try {
 			const r = await send<{ task?: unknown; updated?: number }>('POST', '/jobs/bulk', { ids, action });
-			toasts.show(r.task ? `Started: ${action === 'tailor' ? 'tailoring' : 'screening'} ${ids.length} job(s).` : `Updated ${r.updated} job(s).`);
+			const doing: Record<string, string> = { tailor: 'tailoring', score: 'fit-scoring', rescreen: 'screening' };
+			toasts.show(r.task ? `Started: ${doing[action] ?? action} ${ids.length} job(s). Follow it in the task tray.` : `Updated ${r.updated} job(s).`);
 			selected = new Set();
 			invalidateAll();
 		} catch (e) {
@@ -74,6 +76,7 @@
 			e: () => row && bulk('eligible', selected.size ? [...selected] : [row.id]),
 			i: () => row && bulk('ineligible', selected.size ? [...selected] : [row.id]),
 			t: () => row && bulk('tailor', selected.size ? [...selected] : [row.id]),
+			s: () => row && bulk('score', selected.size ? [...selected] : [row.id]),
 			h: () => row && bulk(page.url.searchParams.get('hidden') ? 'unhide' : 'hide', selected.size ? [...selected] : [row.id]),
 			'/': () => document.getElementById('job-search')?.focus()
 		};
@@ -96,15 +99,32 @@
 	<h1 class="h1">Jobs <span class="text-base font-normal text-muted">{data.total}</span></h1>
 	<p class="hidden text-xs text-muted lg:block">
 		<kbd>j</kbd>/<kbd>k</kbd> move · <kbd>Enter</kbd> open · <kbd>x</kbd> select · <kbd>e</kbd>/<kbd>i</kbd> eligible/ineligible ·
-		<kbd>t</kbd> tailor · <kbd>h</kbd> hide · <kbd>/</kbd> search
+		<kbd>s</kbd> score fit · <kbd>t</kbd> tailor · <kbd>h</kbd> hide · <kbd>/</kbd> search
 	</p>
 </div>
 
 <div class="mb-3 flex flex-wrap gap-1.5">
 	{#each views as v (v.label)}
-		<button class="btn btn-sm {viewActive(v.params) ? 'btn-primary' : ''}" onclick={() => setParams({ ...v.params, q: search.trim() || null, sort: page.url.searchParams.get('sort') }, true)}>{v.label}</button>
+		<button class="btn btn-sm {viewActive(v.params) ? 'btn-primary' : ''}" onclick={() => setParams({ ...v.params, q: search.trim() || null, sort: page.url.searchParams.get('sort') }, true)} title={v.label === 'Cut' ? 'Fit-scored below the cut-off (Settings › Runs and limits); never tailored' : undefined}>{v.label}{v.label === 'Cut' && data.cutCount ? ` (${data.cutCount})` : ''}</button>
 	{/each}
 </div>
+{#if page.url.searchParams.get('cut')}
+	<p class="mb-3 text-xs text-muted">Postings cut for a fit score below your cut-off, or for being older than your date cutoff. Change both under <a class="text-accent hover:underline" href="/settings/runs">Settings › Runs and limits</a> and <a class="text-accent hover:underline" href="/settings/sources">Job sources</a>.</p>
+	{#if data.deleted.length}
+		<details class="card mb-3 p-3 text-sm" open={!data.rows.length}>
+			<summary class="cursor-pointer font-medium">Deleted ({data.deleted.length}): only a small record is kept, so they aren't fetched again</summary>
+			<ul class="mt-2 max-h-96 divide-y divide-line overflow-y-auto">
+				{#each data.deleted as d (d.id)}
+					<li class="flex items-center gap-3 py-1.5">
+						<span class="min-w-0 flex-1 truncate"><b>{d.company}</b> · {d.title}{d.location ? ` · ${d.location}` : ''}</span>
+						<span class="text-xs whitespace-nowrap text-muted">{d.reason === 'low_fit' ? `fit ${d.fit_score?.toFixed(2)}` : 'too old'} · {date(d.cut_at)}</span>
+						<button class="btn btn-sm" title="The next fetch, or adding its link, stores it again" onclick={async () => { try { await send('DELETE', `/cut/${encodeURIComponent(d.id)}`); toasts.show('Allowed again: the next fetch can bring it back.'); await invalidateAll(); } catch (e) { toasts.show(e instanceof ApiError ? e.message : 'That failed.', 'error'); } }}>Allow again</button>
+					</li>
+				{/each}
+			</ul>
+		</details>
+	{/if}
+{/if}
 
 <div class="mb-3 flex flex-wrap items-center gap-2">
 	<input id="job-search" class="input max-w-xs" placeholder="Search company, role, place" bind:value={search} oninput={onSearch} aria-label="Search jobs" />
@@ -127,6 +147,7 @@
 	<div class="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-surface p-2 shadow-sm">
 		<span class="px-1 text-sm font-medium">{selected.size} selected</span>
 		<button class="btn btn-sm btn-primary" onclick={() => bulk('tailor')}>Tailor</button>
+		<button class="btn btn-sm" onclick={() => bulk('score')} title="Fit-score these jobs with the score step's model, even if scored before">Score fit</button>
 		<button class="btn btn-sm" onclick={() => bulk('rescreen')}>Screen again</button>
 		<button class="btn btn-sm" onclick={() => bulk('eligible')}>Mark eligible</button>
 		<button class="btn btn-sm" onclick={() => bulk('ineligible')}>Mark ineligible</button>

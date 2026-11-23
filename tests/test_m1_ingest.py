@@ -105,7 +105,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
     if host == "api.ashbyhq.com" and path == "/posting-api/job-board/labco":
         return httpx.Response(200, json=ASHBY_JOBS)
     if host == "careers.example.com":
-        page = "<html><head><style>x{}</style></head><body><h1>Intern</h1><p>" + "Words. " * 60
+        page = "<html><head><style>x{}</style></head><body><h1>Intern</h1><p>" + POSTING_WORDS * 4
         return httpx.Response(200, text=page + "</p></body></html>")
     return httpx.Response(404, json={"error": "not found"})
 
@@ -183,12 +183,16 @@ def test_fetch_single_jobs(client):
 # --- paste / URL -------------------------------------------------------------
 
 
+POSTING_WORDS = ("Words. As an intern you will join our team and build robotics software with a mentor. "
+                 "Requirements: experience with Python and C++. Preferred: a degree in progress. ")  # fmt: skip
+
+
 def _fake_extract(text: str) -> PostingFields:
     return PostingFields(company="Northwind Robotics", title="SWE Intern", location="Pittsburgh, PA")
 
 
 def test_from_text_uses_extractor_and_stable_id():
-    text = "Northwind is hiring. " * 20
+    text = "Northwind is hiring. " * 5 + POSTING_WORDS * 2
     a = from_text(text, _fake_extract)
     b = from_text("  " + text.upper() + "\n", _fake_extract)  # whitespace/case-insensitive ID
     assert a.id == b.id and a.id.startswith("paste:")
@@ -305,18 +309,29 @@ def test_cli_fetch_and_list(home):
 
     runner.invoke(app, ["config", "set", "sources.greenhouse", '["acme", "nope"]'])
     runner.invoke(app, ["config", "set", "sources.title_include", '["intern"]'])
-    r = runner.invoke(app, ["fetch"])
+    r = runner.invoke(app, ["fetch"])  # the fixture posting is older than the 21-day default
+    assert r.exit_code == 0, r.output
+    assert "greenhouse:acme  2 received, 1 filtered out by title, 1 too old, 0 new" in r.output
+    r = runner.invoke(app, ["fetch", "--max-age", "0"])
     assert r.exit_code == 0, r.output
     assert "greenhouse:acme  2 received, 1 filtered out by title, 1 new" in r.output
     assert "no board named 'nope'" in r.output
 
-    r = runner.invoke(app, ["fetch", "-b", "ashby:labco"])
+    r = runner.invoke(app, ["fetch", "-b", "ashby:labco", "--max-age", "0"])
     assert "1 new" in r.output
 
     r = runner.invoke(app, ["jobs", "list"])
     assert "greenhouse:111" in r.output and f"ashby:{ASHBY_ID}" in r.output
     r = runner.invoke(app, ["jobs", "show", "greenhouse:111"])
     assert "Build things." in r.output
+
+    # A fetch with the usual 21-day cutoff deletes the stored postings that are older...
+    r = runner.invoke(app, ["fetch", "-b", "ashby:labco"])
+    assert "older than 21 days" in r.output
+    assert "greenhouse:111" not in runner.invoke(app, ["jobs", "list"]).output
+    # ...and they don't come back, even without a cutoff.
+    r = runner.invoke(app, ["fetch", "-b", "greenhouse:acme", "--max-age", "0"])
+    assert "1 cut before" in r.output
 
     assert runner.invoke(app, ["fetch", "-b", "monster:x"]).exit_code == 1
 
@@ -330,7 +345,7 @@ def test_cli_add(home, monkeypatch):
     assert r.exit_code == 1 and "does not allow automated access" in r.output
 
     posting = home / "posting.txt"
-    posting.write_text("Northwind Robotics is hiring a SWE intern in Pittsburgh. " * 10)
+    posting.write_text("Northwind Robotics is hiring a SWE intern in Pittsburgh. " * 4 + POSTING_WORDS * 2)
 
     monkeypatch.setattr(
         "autotailor.chains.extract_posting.extract_posting_fields",
@@ -340,3 +355,58 @@ def test_cli_add(home, monkeypatch):
     assert r.exit_code == 0 and "Added paste:" in r.output
     r = runner.invoke(app, ["add"], input=posting.read_text())
     assert r.exit_code == 0 and "Refreshed paste:" in r.output
+
+
+def test_date_cutoff():
+    from datetime import timedelta
+
+    from autotailor.ingest import is_recent
+    from autotailor.models import JobPosting, Source
+
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+
+    def posting(days_ago):
+        when = None if days_ago is None else now - timedelta(days=days_ago)
+        return JobPosting(id="lever:x", source=Source.LEVER, source_ref="x", company="A", title="Intern", posted_at=when)
+
+    assert is_recent(posting(20), 21, now=now) and not is_recent(posting(22), 21, now=now)
+    assert is_recent(posting(400), 0, now=now)  # 0: no cutoff
+    assert is_recent(posting(None), 21, now=now) and not is_recent(posting(None), 21, keep_undated=False, now=now)
+    naive = posting(5).model_copy(update={"posted_at": (now - timedelta(days=5)).replace(tzinfo=None)})
+    assert is_recent(naive, 21, now=now)
+
+
+NAV_ONLY = "\n".join(["Careers Home", "Areas of Interest", "- Engineering", "- AI, ML & DS", "- Cyber", "- Science",
+                     "- Research & Analysis", "- Internships", "Log In", "All Job Listings", "Contact Us",
+                     "Main Campus, 11100 Johns Hopkins Road", "Cookies are used on this site to assist in improving "
+                     "the candidate experience. Learn more on our Privacy Policy page."])  # fmt: skip
+
+
+def test_navigation_only_pages_are_refused_with_a_hint():
+    from autotailor.sources.paste import from_text, looks_like_posting
+
+    assert not looks_like_posting(NAV_ONLY)
+    with pytest.raises(ValueError, match="paste that instead"):
+        from_text(NAV_ONLY * 2, lambda text: pytest.fail("the model must not be called"), url="https://x.org/1", check=True)
+    real = ("We are seeking interns to join our team. You\u2019ll work with a mentor on real projects. "
+            "Candidates should have experience in Python and knowledge of machine learning.")  # fmt: skip
+    assert looks_like_posting(real)
+
+
+def test_postings_are_read_from_schema_org_data_without_a_model():
+    from autotailor.sources.paste import from_json_ld, from_url
+
+    description = "<p>As an intern you will build data pipelines.</p><ul><li>Python and SQL skills</li></ul>" + "<p>More detail.</p>" * 30
+    ld = {"@context": "http://schema.org", "@graph": [{"@type": "WebPage"}, {
+        "@type": "JobPosting", "title": "2027 Internship - AI & Data Science", "description": description,
+        "datePosted": "2026-11-10T03:46:00Z", "hiringOrganization": {"@type": "Organization", "name": "Example Lab"},
+        "jobLocation": [{"@type": "Place", "address": {"addressLocality": "Laurel", "addressRegion": "Maryland"}}]}]}
+    html = f"<html><body><nav>{NAV_ONLY}</nav><script type='application/ld+json'>{json.dumps(ld)}</script></body></html>"
+    p = from_json_ld(html, "https://careers.example.org/jobs/1")
+    assert (p.company, p.title, p.location) == ("Example Lab", "2027 Internship - AI & Data Science", "Laurel, Maryland")
+    assert p.posted_at == datetime(2026, 11, 10, 3, 46, tzinfo=UTC) and "- Python and SQL skills" in p.description
+    assert from_json_ld("<html><script type='application/ld+json'>not json</script></html>", "https://x.org") is None
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, text=html)))
+    got = from_url(client, "https://careers.example.org/jobs/1", lambda text: pytest.fail("no model needed"))
+    assert got.title == p.title

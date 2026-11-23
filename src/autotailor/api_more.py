@@ -25,7 +25,17 @@ EVENT_POLL = 1.5
 
 class BulkIn(BaseModel):
     ids: list[str]
-    action: Literal["tailor", "rescreen", "eligible", "ineligible", "clear_override", "hide", "unhide"]
+    action: Literal["tailor", "score", "rescreen", "eligible", "ineligible", "clear_override", "hide", "unhide"]
+
+
+class EditedBullet(BaseModel):
+    source_id: str
+    text: str
+
+
+class ResumeEditIn(BaseModel):
+    bullets: list[EditedBullet]
+    skills: list[str] = []
 
 
 class HiddenIn(BaseModel):
@@ -111,15 +121,21 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         response: Response, conn=Depends(_conn),  # noqa: ANN001
         verdict: str | None = None, q: str | None = None, source: str | None = None,
         min_fit: float | None = None, has_resume: bool | None = None, hidden: bool = False,
-        applied: bool | None = None, sort: str = "fit", offset: int = 0, limit: int = 100,
+        applied: bool | None = None, sort: str = "fit", offset: int = 0, limit: int = 100, cut: bool = False,
+        settings: Settings = Depends(_settings),
     ) -> list[dict]:  # fmt: skip
-        """The jobs table: one row per posting with its verdict, fit and progress. Total in X-Total-Count."""
+        """The jobs table: one row per posting with its verdict, fit and progress. Total in X-Total-Count.
+
+        Postings below the fit cut-off (run.cut_low_fit) are left out; `cut=true` lists only them.
+        Their number, for the Cut view, is in X-Cut-Count. The Hidden view shows hidden ones either way."""
+        from autotailor.matching import is_cut
+
         matches = db.all_matches(conn)
         hidden_set = db.hidden_ids(conn)
         apps = {r["posting_id"]: r["status"] for r in db.list_applications(conn)}
         tailored = {r[0] for r in conn.execute("SELECT DISTINCT posting_id FROM artifacts WHERE kind = ?",
                                                (ArtifactKind.RESUME_PDF.value,))}  # fmt: skip
-        rows = []
+        rows, cut_count = [], 0
         for p in db.list_postings(conn, None):
             m = matches.get(p.id)
             v = m.verdict.value if m else "not_screened"
@@ -129,8 +145,15 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
                 "verdict": v, "overridden": bool(m and m.original_verdict), "fit": m.fit_score if m else None,
                 "prescore": m.prescore if m else None, "runway_score": p.external_score,
                 "tailored": p.id in tailored, "application": apps.get(p.id), "hidden": p.id in hidden_set,
+                "cut": is_cut(m, settings.run),
             }  # fmt: skip
-            if (row["hidden"] != hidden) or (verdict and v != verdict) or (source and row["source"] != source):
+            if row["hidden"] != hidden:
+                continue
+            if not hidden and row["cut"]:
+                cut_count += 1
+            if not hidden and row["cut"] != cut:
+                continue
+            if (verdict and v != verdict) or (source and row["source"] != source):
                 continue
             if q and q.lower() not in f"{p.company} {p.title} {p.location or ''}".lower():
                 continue
@@ -148,6 +171,8 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         }
         rows.sort(key=keys.get(sort, keys["fit"]), reverse=sort != "company")
         response.headers["X-Total-Count"] = str(len(rows))
+        deleted = conn.execute("SELECT COUNT(*) FROM cut_postings").fetchone()[0]
+        response.headers["X-Cut-Count"] = str(cut_count + deleted)
         return rows[offset : offset + limit]
 
     @app.get("/api/jobs/{posting_id}")
@@ -203,13 +228,23 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             cv = load_master_cv(_paths(request).master_cv)
             diff = [vars(r) for r in resume_diff(resume, cv)]
         except (OSError, ValueError):
+            cv = None
             diff = [{"source_id": b.source_id, "original": None, "tailored": b.text, "changed": True, "html": b.text}
                     for b in resume.bullets]  # fmt: skip
         files = {a["kind"]: a["path"] for a in same_run}
         from autotailor.resume.render import pdf_page_count
 
         pdf = outputs / files[ArtifactKind.RESUME_PDF.value] if ArtifactKind.RESUME_PDF.value in files else None
+        cv_bullets, cv_skills = [], []
+        if cv is not None:  # what the editor may add: every bullet not hidden, and the CV's skills
+            hidden, texts = cv.hidden_bullets(), cv.bullets()
+            cv_bullets = [{"id": i, "text": texts[i].text, "entry": getattr(e, "title", None) or getattr(e, "school", "")}
+                          for i, e in cv.entry_of().items() if i not in hidden]  # fmt: skip
+            cv_skills = [{"name": g.name, "items": g.items} for g in cv.skills]
+        from autotailor.resume.output import ORIGINAL
+
         return {
+            "edited": (folder / ORIGINAL).exists(), "cv_bullets": cv_bullets, "cv_skills": cv_skills,
             "run_id": data["run_id"], "model": data["model"], "created_at": data["created_at"],
             "pdf": files.get(ArtifactKind.RESUME_PDF.value), "docx": files.get(ArtifactKind.RESUME_DOCX.value),
             "pages": pdf_page_count(pdf.read_bytes()) if pdf and pdf.exists() else None,
@@ -220,6 +255,90 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             "keywords_missing": fit.get("keywords_missing", []),
         }  # fmt: skip
 
+    def _resume_files(conn, request: Request, posting_id: str) -> dict[str, Path]:  # noqa: ANN001
+        outputs = _paths(request).outputs
+        arts = db.artifacts_for(conn, posting_id)
+        data = _need(next((a for a in arts if a["kind"] == ArtifactKind.RESUME_DATA.value), None), "resume for this posting")
+        files = {a["kind"]: outputs / a["path"] for a in arts if a["run_id"] == data["run_id"]}
+        data_path = outputs / data["path"]
+        return {"data": data_path, "folder": data_path.parent,
+                "pdf": files.get(ArtifactKind.RESUME_PDF.value, data_path.with_name("resume.pdf")),
+                "docx": files.get(ArtifactKind.RESUME_DOCX.value, data_path.with_name("resume.docx"))}  # fmt: skip
+
+    def _save_resume(conn, request: Request, posting_id: str, resume: TailoredResume, settings: Settings) -> dict:  # noqa: ANN001
+        from autotailor.cv import load_master_cv
+        from autotailor.resume.output import Style, save_edit
+
+        p = _need(db.get_posting(conn, posting_id), f"posting {posting_id}")
+        f = _resume_files(conn, request, posting_id)
+        cv = load_master_cv(_paths(request).master_cv)
+        try:
+            out = save_edit(f["folder"], f["pdf"], f["docx"], f["data"], resume, cv,
+                            Style.from_settings(settings, _paths(request)), f"{p.title}\n{p.description or ''}")  # fmt: skip
+        except Exception as e:  # LaTeX errors in a custom template
+            raise HTTPException(422, f"Couldn't render the resume: {e}") from e
+        return {"pages": out.pages, "warnings": out.warnings, "keyword_score": out.keyword_score}
+
+    @app.put("/api/jobs/{posting_id}/resume")
+    def edit_resume(posting_id: str, body: ResumeEditIn, request: Request, conn=Depends(_conn),  # noqa: ANN001
+                    settings: Settings = Depends(_settings)) -> dict:  # fmt: skip
+        """Save hand edits to a tailored resume: bullets (CV bullets, in order, text as edited)
+        and skills. The PDF and Word files are rendered again; the tailored version is kept."""
+        from autotailor.cv import load_master_cv
+        from autotailor.models import TailoredBullet
+
+        cv = load_master_cv(_paths(request).master_cv)
+        known, hidden = cv.bullets(), cv.hidden_bullets()
+        ids = [b.source_id for b in body.bullets]
+        bad = [i for i in ids if i not in known or i in hidden]
+        if bad:
+            raise HTTPException(422, f"Not bullets that can go on a resume: {', '.join(bad)}")
+        if len(set(ids)) != len(ids):
+            raise HTTPException(422, "A bullet appears twice.")
+        if not ids or any(not b.text.strip() for b in body.bullets):
+            raise HTTPException(422, "Every bullet needs text, and the resume needs at least one bullet.")
+        skills = {s.lower(): s for g in cv.skills for s in g.items}
+        unknown = [s for s in body.skills if s.lower() not in skills]
+        if unknown:
+            raise HTTPException(422, f"Not in your CV's skills: {', '.join(unknown)}. Add them on the Master CV page first.")
+        saved = TailoredResume.model_validate_json(_resume_files(conn, request, posting_id)["data"].read_text(encoding="utf-8"))
+        resume = saved.model_copy(update={
+            "bullets": [TailoredBullet(source_id=b.source_id, text=" ".join(b.text.split())) for b in body.bullets],
+            "skills": [skills[s.lower()] for s in body.skills],
+        })  # fmt: skip
+        return _save_resume(conn, request, posting_id, resume, settings)
+
+    @app.post("/api/jobs/{posting_id}/resume/restore")
+    def restore_resume(posting_id: str, request: Request, conn=Depends(_conn),  # noqa: ANN001
+                       settings: Settings = Depends(_settings)) -> dict:  # fmt: skip
+        """Undo every hand edit: back to the resume as AutoTailor tailored it."""
+        from autotailor.resume.output import ORIGINAL
+
+        f = _resume_files(conn, request, posting_id)
+        original = f["folder"] / ORIGINAL
+        if not original.exists():
+            raise HTTPException(404, "This resume hasn't been edited.")
+        out = _save_resume(conn, request, posting_id, TailoredResume.model_validate_json(original.read_text(encoding="utf-8")), settings)
+        original.unlink()
+        fit_file = f["folder"] / "fit.json"
+        if fit_file.exists():
+            fit = json.loads(fit_file.read_text(encoding="utf-8"))
+            fit["edited"] = False
+            fit_file.write_text(json.dumps(fit, indent=1), encoding="utf-8")
+        return out
+
+    @app.get("/api/cut")
+    def cut_list(conn=Depends(_conn)) -> list[dict]:  # noqa: ANN001
+        """Postings deleted to keep the database small (low fit or too old); they aren't fetched again."""
+        return [dict(r) for r in db.list_cut(conn)]
+
+    @app.delete("/api/cut/{posting_id}")
+    def cut_allow(posting_id: str, conn=Depends(_conn)) -> dict:  # noqa: ANN001
+        """Let a deleted posting back in: the next fetch (or adding its link) stores it again."""
+        if not db.uncut(conn, posting_id):
+            raise HTTPException(404, "No deleted posting with that ID.")
+        return {"ok": True}
+
     @app.put("/api/jobs/{posting_id}/hidden")
     def set_hidden(posting_id: str, body: HiddenIn, conn=Depends(_conn)) -> dict:  # noqa: ANN001
         _need(db.get_posting(conn, posting_id), f"posting {posting_id}")
@@ -228,14 +347,16 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
 
     @app.post("/api/jobs/bulk")
     def bulk(body: BulkIn, request: Request, conn=Depends(_conn)) -> dict:  # noqa: ANN001
-        """Act on several jobs. Tailor and rescreen start a background task; the rest are immediate."""
+        """Act on several jobs. Tailor, score and rescreen start a background task; the rest are immediate."""
         ids = [i for i in body.ids if db.get_posting(conn, i)]
         if not ids:
             raise HTTPException(422, "None of those postings exist.")
-        if body.action in ("tailor", "rescreen"):
+        if body.action in ("tailor", "score", "rescreen"):
             # Jobs picked by hand are tailored again even if they already have a resume
-            # ("Tailor again"); the shortlist buttons still skip finished ones.
-            args = ["tailor", *ids, "--force"] if body.action == "tailor" else ["screen", *ids, "--reextract"]
+            # ("Tailor again"); the shortlist buttons still skip finished ones. Scoring picked
+            # jobs always scores them (again).
+            args = {"tailor": ["tailor", *ids, "--force"], "score": ["rank", *ids],
+                    "rescreen": ["screen", *ids, "--reextract"]}[body.action]  # fmt: skip
             tid = tasks.enqueue(conn, "cli", args)
             tasks.ensure_worker(_paths(request).home, _paths(request).data)
             return {"task": dict(tasks.get(conn, tid))}

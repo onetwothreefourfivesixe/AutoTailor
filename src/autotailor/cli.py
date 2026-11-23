@@ -214,16 +214,86 @@ def _parse_board(spec: str) -> tuple[Source, str]:
     return names[name], slug
 
 
+def _prune(conn, settings: Settings, compact: bool = False) -> None:  # noqa: ANN001
+    """Delete low-fit and too-old postings (see matching.prune) and say how many."""
+    from autotailor import matching
+
+    n = matching.prune(conn, settings)
+    if n["low_fit"] or n["too_old"]:
+        parts = [f"{n['low_fit']} below the fit cut-off"] * bool(n["low_fit"]) + [
+            f"{n['too_old']} older than {settings.sources.max_age_days} days"] * bool(n["too_old"])  # fmt: skip
+        typer.echo(f"Deleted {' and '.join(parts)} (kept: ones you tailored, applied to or added questions for).", err=True)
+        if compact:
+            db.compact(conn)
+
+
+@app.command()
+def discover(
+    fields: str = typer.Argument(..., help='The fields or industries you\'re interested in, e.g. "biomedical".'),
+    n: int = typer.Option(40, "-n", min=10, max=100, help="How many more companies to ask the model for."),
+    no_model: bool = typer.Option(False, "--no-model", help="Only the built-in catalog; don't ask the model for more."),
+    add: bool = typer.Option(False, "--add", help="Follow every board found (adds them to [sources])."),
+) -> None:
+    """Find companies in the fields you describe whose job boards AutoTailor can read.
+
+    Your words are matched to industries in AutoTailor's catalog of verified job boards; the
+    `extract` step's model can suggest more companies (only your description is sent), whose
+    Greenhouse, Lever and Ashby boards are checked. Only boards that exist are listed.
+    """
+    from autotailor.config import save_settings
+    from autotailor.sources import make_client
+    from autotailor.sources.discover import LEARNED
+    from autotailor.sources.discover import discover as run
+
+    settings = _settings()
+    spec = settings.models.for_step("extract")
+    typer.echo(f"Asking {describe(spec)} for companies in: {fields} ...", err=True)
+    with make_client() as client:
+        d = run(fields, settings, client, ask_model=not no_model, n=n, store=get_paths().data / LEARNED)
+    found, missing = d.boards, d.not_found
+    typer.echo(f"Industries: {', '.join(d.industries) or 'none'}", err=True)
+    for b in found:
+        tag = "  (suggested by the model)" if b.name in d.from_model else ""
+        typer.echo(f"{b.ats + ':' + b.slug:<40} {b.jobs:>4} jobs  {b.name}{tag}")
+    typer.echo(f"\n{len(found)} boards found ({len(d.from_model)} from the model's suggestions, now saved to "
+               f"the catalog for later searches); no board found for {len(missing)} suggestions.", err=True)  # fmt: skip
+    if add and found:
+        for b in found:
+            lst = getattr(settings.sources, b.ats)
+            if b.slug not in lst:
+                lst.append(b.slug)
+        save_settings(settings, get_paths().config)
+        typer.echo(f"Following {len(found)} more boards (see `autotailor config show`).")
+
+
+@app.command()
+def prune() -> None:
+    """Delete postings below the fit cut-off and ones older than sources.max_age_days, then
+    shrink the database file. Runs on its own after every fetch and rank."""
+    settings = _settings()
+    path = get_paths().db
+    before = path.stat().st_size
+    conn = db.connect(path)
+    _prune(conn, settings)
+    db.compact(conn)
+    conn.close()
+    typer.echo(f"Database: {before / 1e6:.1f} MB -> {path.stat().st_size / 1e6:.1f} MB.")
+
+
 @app.command()
 def fetch(
     board: list[str] = typer.Option(
         None, "--board", "-b", help="<source>:<slug>, e.g. greenhouse:figma. Repeatable."
     ),
     no_filter: bool = typer.Option(False, "--no-filter", help="Ignore the title filter."),
+    max_age: int = typer.Option(
+        None, "--max-age", min=0, help="Skip postings older than this many days (default: sources.max_age_days; 0 for no cutoff)."
+    ),
 ) -> None:
     """Pull postings from company job boards (Greenhouse, Lever, Ashby).
 
     Without --board, fetches every board listed under [sources] in config.toml.
+    Postings first published more than sources.max_age_days ago (21 by default) are skipped.
     """
     from autotailor.sources import make_client
     from autotailor.sources.ats import fetch_board
@@ -244,6 +314,9 @@ def fetch(
 
     include = [] if no_filter else settings.sources.title_include
     exclude = [] if no_filter else settings.sources.title_exclude
+    days = settings.sources.max_age_days if max_age is None else max_age
+    if days:
+        typer.echo(f"Keeping postings from the last {days} days.", err=True)
     conn = db.connect(get_paths().db)
     failures = 0
     with make_client() as client:
@@ -261,8 +334,11 @@ def fetch(
                 failures += 1
                 typer.secho(f"{label}  failed: {e}", fg=typer.colors.RED, err=True)
                 continue
-            report = ingest(conn, postings, include, exclude)
+            report = ingest(conn, postings, include, exclude, days, settings.sources.keep_undated)
             typer.echo(f"{label}  {report.summary()}")
+    # This fetch's cutoff (--max-age) also decides what counts as too old now.
+    sources = settings.sources.model_copy(update={"max_age_days": days})
+    _prune(conn, settings.model_copy(update={"sources": sources}), compact=True)
     conn.close()
     if failures == len(boards):
         raise typer.Exit(1)
@@ -329,14 +405,27 @@ def jobs_list(
     status: PostingStatus | None = typer.Option(None, "--status", "-s"),
     source: Source | None = typer.Option(None, "--source"),
     verdict: Verdict | None = typer.Option(None, "--verdict", "-v", help="Only this eligibility verdict."),
+    include_cut: bool = typer.Option(False, "--include-cut", help="Also list postings below the fit cut-off."),
 ) -> None:
-    """List stored postings, newest first, with their eligibility verdict."""
+    """List stored postings, newest first, with their eligibility verdict.
+
+    Postings whose fit score is below the cut-off (run.cut_low_fit) are left out unless --include-cut.
+    """
+    from autotailor.matching import is_cut
+
+    settings = _settings()
     conn = db.connect(get_paths().db)
     matches = db.all_matches(conn)
-    rows = db.list_postings(conn, None if verdict else limit, status, source.value if source else None)
+    rows = db.list_postings(conn, None, status, source.value if source else None)
     conn.close()
+    cut = [p for p in rows if is_cut(matches.get(p.id), settings.run)]
+    if not include_cut:
+        rows = [p for p in rows if p not in cut]
     if verdict:
-        rows = [p for p in rows if p.id in matches and matches[p.id].verdict == verdict][:limit]
+        rows = [p for p in rows if p.id in matches and matches[p.id].verdict == verdict]
+    rows = rows[:limit]
+    if cut and not include_cut:
+        typer.echo(f"({len(cut)} postings below the fit cut-off are left out; --include-cut lists them.)", err=True)
     if not rows:
         typer.echo("No matching postings. Try `autotailor fetch`, `autotailor add` or `autotailor screen`.")
         return
@@ -506,12 +595,15 @@ def _print_ranking(conn, settings: Settings, limit: int) -> None:
 
 @app.command()
 def rank(
+    posting_ids: list[str] = typer.Argument(None, help="Fit-score just these postings (always, even if scored before)."),
     rescore: bool = typer.Option(False, "--rescore", help="Fit-score the shortlist again, even if scored before."),
     show: int = typer.Option(None, "--show", "-n", min=1, help="Rows to print (default: shortlist size)."),
 ) -> None:
     """Rank eligible postings: local embedding pre-rank, then fit scores for the shortlist.
 
-    Run `autotailor screen` first; only postings that pass eligibility are ranked.
+    Run `autotailor screen` first; only postings that pass eligibility are ranked. With posting
+    IDs, those screened postings are fit-scored whatever their verdict, and kept even if they
+    score below the cut-off this time (the next fetch or rank applies it).
     """
     from autotailor import matching
     from autotailor.chains.score_fit import score_fit_batch
@@ -526,11 +618,26 @@ def rank(
         return
     conn = db.connect(paths.db)
     matches = db.all_matches(conn)
-    candidates = [
-        p
-        for p in db.list_postings(conn, None)
-        if p.id in matches and p.description and passes_gate(matches[p.id].verdict, settings.eligibility)
-    ]
+    chosen = [i.strip() for i in (posting_ids or []) if i.strip()]
+    if chosen:
+        candidates = []
+        for pid in chosen:
+            p = db.get_posting(conn, pid)
+            if p is None or not p.description:
+                typer.secho(f"{pid}: not found or has no description; skipped.", fg=typer.colors.YELLOW, err=True)
+                continue
+            if pid not in matches:
+                typer.secho(f"{pid}: not screened yet; run `autotailor screen {pid}` first.", fg=typer.colors.YELLOW, err=True)
+                continue
+            candidates.append(p)
+        if not candidates:
+            _fail("None of those postings can be scored.")
+    else:
+        candidates = [
+            p
+            for p in db.list_postings(conn, None)
+            if p.id in matches and p.description and passes_gate(matches[p.id].verdict, settings.eligibility)
+        ]
     if not candidates:
         _fail("No eligible postings to rank. Run `autotailor fetch` or `add`, then `autotailor screen`.")
 
@@ -550,7 +657,7 @@ def rank(
         db.save_prescore(conn, pid, score)
 
     shortlisted = sorted(candidates, key=lambda p: prescores[p.id], reverse=True)[: settings.run.shortlist_size]
-    to_score = [p for p in shortlisted if rescore or matches[p.id].fit is None]
+    to_score = candidates if chosen else [p for p in shortlisted if rescore or matches[p.id].fit is None]
     if to_score:
         score_spec = settings.models.for_step("score")
         typer.echo(f"Fit-scoring {len(to_score)} postings with {describe(score_spec)} ...", err=True)
@@ -583,6 +690,13 @@ def rank(
         if failed:
             typer.secho(f"{failed} postings could not be scored.", fg=typer.colors.RED, err=True)
 
+    if chosen:
+        for pid in chosen:
+            m = db.get_match(conn, pid)
+            if m and m.fit_score is not None:
+                typer.echo(f"{pid}: fit {m.fit_score:.2f}")
+    else:
+        _prune(conn, settings, compact=True)
     _print_ranking(conn, settings, show or settings.run.shortlist_size)
     picked = matching.shortlist(conn, settings)
     conn.close()
@@ -1440,7 +1554,7 @@ def run_all(
     else:
         step("Fetch")
         try:
-            fetch(board=None, no_filter=False)
+            fetch(board=None, no_filter=False, max_age=None)
         except typer.Exit as e:
             if e.exit_code:
                 typer.secho("Every board failed; continuing with stored postings.", fg=typer.colors.YELLOW, err=True)
