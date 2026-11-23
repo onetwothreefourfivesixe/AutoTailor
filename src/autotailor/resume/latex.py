@@ -60,7 +60,9 @@ def escape(value: Any) -> str:
     if isinstance(value, Raw):
         return value
     text = "" if value is None else str(value)
-    return _ESC.sub(lambda m: _ESCAPES[m.group()], text)
+    text = _ESC.sub(lambda m: _ESCAPES[m.group()], text)
+    # Straight double quotes: TeX prints " as a closing quote, so open with `` where one starts.
+    return re.sub(r'(^|(?<=[\s(\[{]))"', "``", text).replace('"', "''")
 
 
 def _url(value: Any) -> Raw:
@@ -118,8 +120,11 @@ def ensure_tectonic(tools: Path) -> Path:
                         f.write(chunk)
             with tarfile.open(archive) as tar:
                 member = next(m for m in tar.getmembers() if Path(m.name).name == "tectonic" and m.isfile())
-                member.name = "tectonic"
-                tar.extract(member, tmp, filter="data")
+                member.name = "tectonic"  # a plain file at the top level, whatever the archive said
+                try:
+                    tar.extract(member, tmp, filter="data")
+                except TypeError:  # Python builds before extraction filters existed
+                    tar.extract(member, tmp)
             shutil.move(str(Path(tmp) / "tectonic"), exe)
     except (httpx.HTTPError, OSError, StopIteration, tarfile.TarError) as e:
         raise LatexUnavailable(f"Couldn't download Tectonic ({type(e).__name__}: {e}).") from e

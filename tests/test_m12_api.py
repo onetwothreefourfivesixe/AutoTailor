@@ -1,0 +1,154 @@
+"""M12: API routes for the Svelte frontend."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+from test_m4_resume import CV_TEXT, _store, _verbatim
+from typer.testing import CliRunner
+
+from autotailor import db, tasks
+from autotailor.api import TOKEN_HEADER, api_token, create_app
+from autotailor.chains.tailor_graph import TailorResult
+from autotailor.cli import app as cli
+from autotailor.paths import get_paths
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOTAILOR_HOME", str(tmp_path))
+    CliRunner().invoke(cli, ["init"])
+    (tmp_path / "cv" / "master.yaml").write_text(CV_TEXT)
+    conn = db.connect(tmp_path / "data" / "autotailor.db")
+    _store(conn, "lever:a", "SWE Intern", 0.9, location="Denver")
+    _store(conn, "lever:b", "ML Intern", 0.7)
+    conn.close()
+    monkeypatch.setattr("autotailor.tasks.ensure_worker", lambda home, data: True)
+    c = TestClient(create_app(tmp_path))
+    c.headers[TOKEN_HEADER] = api_token(get_paths(tmp_path))
+    c.home = tmp_path  # type: ignore[attr-defined]
+    return c
+
+
+def _tailor(client, monkeypatch):
+    from test_m5_batch import LoopGraph
+
+    history = [{"attempt": 1, "bullets": ["exp-lab-detector", "proj-ocr"], "errors": []}]
+    monkeypatch.setattr("autotailor.chains.tailor_graph.tailor_posting",
+                        lambda *a: TailorResult(_verbatim("exp-lab-detector", "proj-ocr"), [], 1, history))  # fmt: skip
+    LoopGraph().install(monkeypatch)
+    r = CliRunner().invoke(cli, ["tailor"])
+    assert r.exit_code == 0, r.output
+
+
+def test_jobs_list_filters_and_total(client):
+    r = client.get("/api/jobs")
+    assert r.headers["X-Total-Count"] == "2" and [j["id"] for j in r.json()] == ["lever:a", "lever:b"]
+    assert [j["id"] for j in client.get("/api/jobs?min_fit=0.8").json()] == ["lever:a"]
+    assert client.get("/api/jobs?q=denver").json()[0]["id"] == "lever:a"
+    assert [j["id"] for j in client.get("/api/jobs?sort=company&limit=1&offset=1").json()] == ["lever:b"]
+
+
+def test_bulk_actions(client):
+    assert client.post("/api/jobs/bulk", json={"ids": ["lever:b"], "action": "ineligible"}).json() == {"updated": 1}
+    assert client.get("/api/jobs?verdict=ineligible").json()[0]["overridden"] is True
+    client.post("/api/jobs/bulk", json={"ids": ["lever:a"], "action": "hide"})
+    assert [j["id"] for j in client.get("/api/jobs").json()] == ["lever:b"]
+    assert [j["id"] for j in client.get("/api/jobs?hidden=true").json()] == ["lever:a"]
+    t = client.post("/api/jobs/bulk", json={"ids": ["lever:b", "nope:1"], "action": "tailor"}).json()["task"]
+    assert t["args_json"] == '["tailor", "lever:b", "--force"]'  # picked by hand: redo even if tailored
+    assert client.post("/api/jobs/bulk", json={"ids": ["nope:1"], "action": "hide"}).status_code == 422
+
+
+def test_job_detail_and_resume(client, monkeypatch):
+    _tailor(client, monkeypatch)
+    j = client.get("/api/jobs/lever:a").json()
+    assert j["posting"]["title"] == "SWE Intern" and j["has_resume"] and j["cited_bullets"][0]["id"] == "exp-lab-detector"
+    assert j["cited_bullets"][0]["text"].startswith("Trained a YOLO")
+    r = client.get("/api/jobs/lever:a/resume").json()
+    assert r["pages"] == 1 and r["pdf"].endswith(".pdf")
+    assert [b["source_id"] for b in r["bullets"]][:2] == ["exp-lab-detector", "proj-ocr"]  # the model's draft first
+    assert set(r["added_to_fill"]) == {b["source_id"] for b in r["bullets"][2:]}  # then bullets added to fill the page
+    assert r["history"][0]["attempt"] == 1 and r["bullets"][0]["changed"] is False
+    assert client.get("/api/jobs/lever:zzz/resume").status_code == 404
+
+
+def test_applications_and_shortlist(client, monkeypatch):
+    _tailor(client, monkeypatch)
+    a = client.put("/api/applications/lever:a", json={"status": "applied", "notes": "via site"}).json()
+    assert a["run_id"] == 1 and [e["status"] for e in a["events"]] == ["applied"]
+    a = client.put("/api/applications/lever:a", json={"status": "interview"}).json()
+    assert a["notes"] == "via site" and [e["status"] for e in a["events"]] == ["applied", "interview"]
+    assert client.put("/api/applications/lever:a", json={"status": "ghosted"}).status_code == 422
+    apps = client.get("/api/applications").json()
+    assert apps[0]["company"] == "Acme" and apps[0]["status"] == "interview"
+    assert "lever:a" not in [s["id"] for s in client.get("/api/overview").json()["shortlist"]]
+    assert client.get("/api/jobs?applied=true").json()[0]["application"] == "interview"
+    client.delete("/api/applications/lever:a")
+    assert client.get("/api/applications").json() == []
+
+
+def test_questions_edit_delete_suggest(client):
+    q = client.post("/api/questions", json={"posting_id": "lever:a", "text": "Why us?"}).json()
+    t = client.post(f"/api/questions/{q['id']}/suggest").json()
+    assert t["args_json"] == f'["answers", "run", "{q["id"]}", "--no-ask", "--redo"]'
+    e = client.patch(f"/api/questions/{q['id']}", json={"answer": "Because robots."}).json()
+    assert e["answer"] == "Because robots." and e["status"] == "drafted"
+    assert any((client.home / "data" / "outputs" / "answers").glob("*.md"))
+    client.delete(f"/api/questions/{q['id']}")
+    assert client.get("/api/questions").json() == []
+
+
+def test_cv_yaml_usage_and_preview(client, monkeypatch):
+    _tailor(client, monkeypatch)
+    usage = client.get("/api/cv/usage").json()
+    assert usage["exp-lab-detector"][0]["run_id"] == 1
+    text = client.get("/api/cv/yaml").text
+    assert "exp-lab-detector" in text
+    r = client.put("/api/cv/yaml", json={"text": text.replace("id: exp-lab-detector", "id: exp-lab-renamed")})
+    assert r.status_code == 409 and "exp-lab-detector" in r.json()["detail"]["uses"]
+    assert client.put("/api/cv/yaml", json={"text": "contact: ["}).status_code == 422
+    png = client.post("/api/cv/preview", json={"template": "typst"})
+    assert png.status_code == 200 and png.content[:4] == b"\x89PNG" and png.headers["X-Pages"] == "1"
+    cv = client.get("/api/cv").json()
+    cv["contact"]["name"] = "Draft Name"
+    assert client.post("/api/cv/preview", json={"cv": cv, "template": "typst"}).status_code == 200
+
+
+def test_templates(client):
+    t = client.get("/api/templates").json()
+    assert [x["name"] for x in t["pdf"]][:3] == ["jake", "jake-compact", "typst"] and t["current"]["pdf"] == "jake"
+    assert client.post("/api/templates", files={"file": ("mine.tex", b"\\documentclass{article}")}).json() == {"name": "mine.tex"}
+    assert client.post("/api/templates", files={"file": ("../evil.sh", b"x")}).status_code == 422
+    assert "mine.tex" in [x["name"] for x in client.get("/api/templates").json()["pdf"]]
+    client.delete("/api/templates/mine.tex")
+    assert "MIT License" in client.get("/api/templates/builtin/jake").text
+
+
+def test_models_and_comparisons(client, monkeypatch):
+    class R:
+        def json(self):
+            return {"models": [{"name": "qwen3-vl:4b-instruct", "size": 3_300_000_000, "details": {"parameter_size": "4B"}}]}
+
+    monkeypatch.setattr("httpx.get", lambda *a, **k: R())
+    m = client.get("/api/models").json()
+    assert {s["step"] for s in m["steps"]} >= {"extract", "tailor", "embeddings"} and m["pulled"][0]["parameters"] == "4B"
+    assert client.get("/api/comparisons").json() == []
+    assert client.get("/api/comparisons/nope").status_code == 404
+
+
+def test_events_stream_first_snapshot(client, monkeypatch):
+    import autotailor.api_more as more
+
+    monkeypatch.setattr(more, "EVENT_POLL", 0.05)
+    conn = db.connect(client.home / "data" / "autotailor.db")
+    tasks.enqueue(conn, "screen")
+    with client.stream("GET", "/api/events") as r:
+        seen, text = set(), ""
+        for line in r.iter_lines():
+            text += line + "\n"
+            if line.startswith("event: "):
+                seen.add(line[7:])
+            if {"tasks", "needs", "runs", "postings"} <= seen and line.startswith("data: "):
+                break
+    assert '"kind": "screen"' in text and '"count": 2' in text

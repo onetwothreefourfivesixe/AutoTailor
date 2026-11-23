@@ -332,13 +332,6 @@ def test_cli_add(home, monkeypatch):
     posting = home / "posting.txt"
     posting.write_text("Northwind Robotics is hiring a SWE intern in Pittsburgh. " * 10)
 
-    def not_written(text, settings):
-        raise NotImplementedError
-
-    monkeypatch.setattr("autotailor.chains.extract_posting.extract_posting_fields", not_written)
-    r = runner.invoke(app, ["add", "--file", str(posting)])
-    assert r.exit_code == 1 and "M1 exercise" in r.output
-
     monkeypatch.setattr(
         "autotailor.chains.extract_posting.extract_posting_fields",
         lambda text, settings: _fake_extract(text),

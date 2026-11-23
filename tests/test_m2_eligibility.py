@@ -266,12 +266,11 @@ def test_cli_screen(home, monkeypatch):
     assert not sent
 
 
-def test_cli_screen_without_chain_uses_titles(home, monkeypatch):
-    # Simulate the M2 exercise being unwritten, whatever state the real chain is in.
-    def unwritten(*args, **kwargs):
-        raise NotImplementedError
+def test_cli_screen_uses_titles_when_the_model_is_unavailable(home, monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise ConnectionError("Ollama is not running")
 
-    monkeypatch.setattr("autotailor.chains.extract_requirements.extract_requirements_batch", unwritten)
+    monkeypatch.setattr("autotailor.chains.extract_requirements.extract_requirements_batch", unavailable)
     r = CliRunner().invoke(app, ["screen"])
     assert r.exit_code == 0, r.output
     assert "Using titles only" in r.output

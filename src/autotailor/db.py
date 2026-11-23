@@ -14,7 +14,7 @@ from pathlib import Path
 from autotailor.dedupe import dedupe_key, locations_compatible, normalize_url
 from autotailor.models import FitAssessment, JobPosting, Match, PostingStatus, Requirements, Verdict
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS postings (
@@ -193,6 +193,26 @@ CREATE TABLE IF NOT EXISTS overrides (
 );
 """
 
+_SCHEMA_V7 = """
+ALTER TABLE postings ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS applications (
+    posting_id  TEXT PRIMARY KEY REFERENCES postings (id) ON DELETE CASCADE,
+    status      TEXT NOT NULL,                   -- applied | heard_back | interview | offer | rejected | withdrawn
+    applied_at  TEXT NOT NULL,
+    run_id      INTEGER,                         -- the run whose resume was sent, if any
+    notes       TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS application_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    posting_id  TEXT NOT NULL REFERENCES postings (id) ON DELETE CASCADE,
+    status      TEXT NOT NULL,
+    note        TEXT,
+    at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_app_events ON application_events (posting_id);
+"""
+
 _MIGRATIONS = {
     1: (_SCHEMA_V1, None),
     2: (_SCHEMA_V2, _backfill_v2),
@@ -200,6 +220,7 @@ _MIGRATIONS = {
     4: (_SCHEMA_V4, None),
     5: (_SCHEMA_V5, None),
     6: (_SCHEMA_V6, None),
+    7: (_SCHEMA_V7, None),
 }
 
 
@@ -207,12 +228,16 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    """Open the database, creating or upgrading the schema as needed."""
+def connect(path: Path, *, any_thread: bool = False) -> sqlite3.Connection:
+    """Open the database, creating or upgrading the schema as needed.
+
+    `any_thread`: allow use from a thread other than the one that opened it (the API opens a
+    connection per request, and its framework may run the route on another thread; the
+    connection is still used by one thread at a time)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     # The UI, the background worker and the task it runs share this file: wait for locks
     # instead of failing, and use the write-ahead log so readers don't block the writer.
-    conn = sqlite3.connect(path, timeout=15)
+    conn = sqlite3.connect(path, timeout=15, check_same_thread=not any_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if str(path) != ":memory:":
@@ -222,14 +247,52 @@ def connect(path: Path) -> sqlite3.Connection:
         raise RuntimeError(
             f"Database schema v{version} is newer than this AutoTailor (v{SCHEMA_VERSION})."
         )
-    for target in range(version + 1, SCHEMA_VERSION + 1):
-        script, backfill = _MIGRATIONS[target]
-        conn.executescript(script)
-        if backfill:
-            backfill(conn)
-        conn.execute(f"PRAGMA user_version = {target}")
-        conn.commit()
+    if version < SCHEMA_VERSION:
+        _migrate(conn)
     return conn
+
+
+def _statements(script: str) -> list[str]:
+    """Split a schema script into single statements (executescript would commit between them)."""
+    out, buf = [], ""
+    for line in script.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            out.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        out.append(buf.strip())
+    return out
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring the schema up to date, safely when several processes open the file at once
+    (the API serves concurrent requests; the worker and its task open it too).
+
+    The write lock is taken first and the version read again under it, so whoever comes
+    second waits and then finds nothing to do. Each upgrade step runs in one transaction:
+    a failure leaves the database at the previous version, never half-upgraded.
+    """
+    conn.commit()
+    previous = conn.isolation_level
+    conn.isolation_level = None  # manage the transaction explicitly
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            for target in range(version + 1, SCHEMA_VERSION + 1):
+                script, backfill = _MIGRATIONS[target]
+                for statement in _statements(script):
+                    conn.execute(statement)
+                if backfill:
+                    backfill(conn)
+                conn.execute(f"PRAGMA user_version = {target}")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.isolation_level = previous
 
 
 def upsert_posting(conn: sqlite3.Connection, p: JobPosting) -> None:
@@ -701,6 +764,65 @@ def update_question(conn: sqlite3.Connection, question_id: int, **fields) -> Non
 
 def delete_question(conn: sqlite3.Connection, question_id: int) -> None:
     conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
+    conn.commit()
+
+
+# --- hidden postings and applications (M12) -------------------------------------------
+
+APPLICATION_STATUSES = ("applied", "heard_back", "interview", "offer", "rejected", "withdrawn")
+
+
+def set_hidden(conn: sqlite3.Connection, posting_id: str, hidden: bool) -> None:
+    conn.execute("UPDATE postings SET hidden = ? WHERE id = ?", (int(hidden), posting_id))
+    conn.commit()
+
+
+def hidden_ids(conn: sqlite3.Connection) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT id FROM postings WHERE hidden = 1")}
+
+
+def get_application(conn: sqlite3.Connection, posting_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM applications WHERE posting_id = ?", (posting_id,)).fetchone()
+
+
+def list_applications(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM applications ORDER BY applied_at DESC").fetchall()
+
+
+def application_events(conn: sqlite3.Connection, posting_id: str) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM application_events WHERE posting_id = ? ORDER BY id", (posting_id,)).fetchall()
+
+
+def set_application(
+    conn: sqlite3.Connection, posting_id: str, status: str, notes: str | None = None,
+    applied_at: str | None = None, run_id: int | None = None,
+) -> sqlite3.Row:  # fmt: skip
+    """Record or update an application; each status change is kept as an event."""
+    if status not in APPLICATION_STATUSES:
+        raise ValueError(f"status must be one of {', '.join(APPLICATION_STATUSES)}")
+    now = _now()
+    old = get_application(conn, posting_id)
+    if old is None:
+        conn.execute(
+            "INSERT INTO applications (posting_id, status, applied_at, run_id, notes, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (posting_id, status, applied_at or now, run_id, notes or "", now),
+        )
+    else:
+        conn.execute(
+            "UPDATE applications SET status = ?, notes = COALESCE(?, notes), applied_at = COALESCE(?, applied_at), "
+            "run_id = COALESCE(?, run_id), updated_at = ? WHERE posting_id = ?",
+            (status, notes, applied_at, run_id, now, posting_id),
+        )
+    if old is None or old["status"] != status:
+        conn.execute("INSERT INTO application_events (posting_id, status, note, at) VALUES (?, ?, ?, ?)",
+                     (posting_id, status, notes, now))  # fmt: skip
+    conn.commit()
+    return get_application(conn, posting_id)
+
+
+def delete_application(conn: sqlite3.Connection, posting_id: str) -> None:
+    conn.execute("DELETE FROM application_events WHERE posting_id = ?", (posting_id,))
+    conn.execute("DELETE FROM applications WHERE posting_id = ?", (posting_id,))
     conn.commit()
 
 

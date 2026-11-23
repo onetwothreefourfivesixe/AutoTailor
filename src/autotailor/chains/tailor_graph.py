@@ -1,150 +1,137 @@
-"""M4 exercise: your first LangGraph graph. Draft a tailored resume, verify it, retry.
+"""Tailor a resume to one posting: draft, verify, retry.
 
     START -> draft -> verify --(passed, or out of attempts)--> END
                ^         |
-               +---------+  (verifier found problems: try again with its feedback)
+               +---------+  (problems found: redraft with them as feedback)
 
-`draft` asks the model for a TailoredResume (autotailor/models.py): which CV
-bullets to use, lightly reworded toward the posting, plus the most relevant
-skills. `verify` runs `verify_resume` (given, autotailor/resume/verify.py),
-which rejects anything the CV doesn't say: unknown bullet IDs, new numbers,
-added tools or names, bloated bullets, too few or too many bullets. If it finds
-problems, the graph loops back to `draft` and the model sees the problems in
-its prompt. AutoTailor only renders a resume that passes.
+`draft` asks the model for a TailoredResume: which CV bullets to use, starting
+from the usual resume (bullets marked `base: true`) and changing it for this
+posting, in the candidate's own wording (a posting's term may be swapped in),
+plus the most relevant skills (prompt "tailor" in structured_prompts.json).
+`verify` runs verify_resume, which rejects anything the CV doesn't say: unknown
+or hidden bullet IDs, new numbers, added tools or names, heavy rewording,
+bloated bullets, too few or too many bullets. Its messages go back into the
+next draft's prompt. AutoTailor only renders a resume that passes.
 
-You implement everything marked TODO. Check your work with:
-
-    uv run pytest tests/test_m4_tailor_graph.py
-    AUTOTAILOR_LIVE=1 uv run pytest tests/test_m4_tailor_graph.py -k live -s
-
-------------------------------------------------------------------------------
-LangGraph concepts
-------------------------------------------------------------------------------
-
-LangChain chains (M1-M3) run in a straight line. A LangGraph graph can branch
-and loop, and carries a shared *state* between steps.
-
-1. State.  A TypedDict listing every key the graph tracks:
-
-       class MyState(TypedDict):
-           posting: str
-           attempts: int
-
-   Each node receives the whole state and returns a dict with only the keys it
-   changes; LangGraph merges that update in. A node never edits the state in
-   place.
-
-2. Reducers (optional).  By default a returned key replaces the old value.
-   Annotating a list key with a reducer makes updates append instead:
-
-       history: Annotated[list[str], operator.add]   # node returns {"history": ["x"]}
-
-   Handy for keeping every attempt's errors, not just the latest.
-
-3. Nodes.  Plain functions `state -> dict`. Register them by name:
-
-       builder = StateGraph(MyState)
-       builder.add_node("draft", draft_fn)
-
-   A node that needs extra things (the model, the CV) can be a closure defined
-   inside `build_graph`, or a `functools.partial`.
-
-4. Edges.  Fixed:        builder.add_edge(START, "draft")
-                         builder.add_edge("draft", "verify")
-   Conditional: a router function looks at the state and returns a label;
-   the mapping sends each label to a node (or END):
-
-       builder.add_conditional_edges("verify", route, {"retry": "draft", "done": END})
-
-5. Compile and run.  `graph = builder.compile()` gives a runnable, like a
-   chain: `graph.invoke(initial_state)` returns the final state.
-   `graph.get_graph().draw_mermaid()` prints a diagram of it.
-
-6. Loop safety.  LangGraph aborts after 25 steps (`recursion_limit`) with
-   GraphRecursionError. Your own attempts counter should end the loop long
-   before that.
-
-------------------------------------------------------------------------------
-Contract (the tests check these)
-------------------------------------------------------------------------------
-
-- build_graph(llm, cv, limits) returns a compiled graph with nodes named
-  "draft" and "verify".
-- Input state: {"posting": str, "profile": str}. Anything else you need
-  (attempts, feedback) starts from defaults you set in the draft node.
-- Final state has "resume" (the last draft), "errors" (verify_resume's list for
-  that draft, [] if it passed) and "attempts" (drafts made).
-- The draft step calls llm.with_structured_output(TailoredResume). On a retry,
-  the previous draft's error messages must appear in the prompt.
-- At most limits.max_attempts drafts, then stop even if errors remain.
-
-The prompt: add a "tailor" entry to structured_prompts.json with variables
-{posting}, {profile} and {feedback}, and load it with
-load_prompt("tailor", TailoredResume). On the first draft, feedback can be an
-empty string or something like "None yet." The prompt should tell the model:
-- pick the bullets most relevant to the posting (the profile already lists
-  IDs in [brackets]; prefer the ones fit scoring marked as most relevant);
-- rewording means swapping in the posting's vocabulary where the facts already
-  match, never adding facts, numbers, tools or names;
-- order bullets most relevant first, and stay within the bullet limits.
+The final state has `resume` (the last draft), `errors` (its problems, [] if it
+passed), `attempts`, and `history`: one entry per draft with the bullets it
+chose and the problems found, shown on the posting's Resume tab.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple
+import difflib
+import operator
+from typing import TYPE_CHECKING, Annotated, NamedTuple, TypedDict
 
-from langchain_protocol import TypedDict
 from langgraph.graph import END, START, StateGraph
 
-from autotailor.chains.prompts import load_prompt  # noqa: F401  (for your prompt)
+from autotailor.chains.prompts import load_prompt
 from autotailor.config import Settings, TailorSettings
 from autotailor.cv import MasterCV
 from autotailor.llm import get_chat_model
-from autotailor.models import TailoredResume
-from autotailor.resume.verify import verify_resume  # noqa: F401  (for your verify node)
+from autotailor.matching import BASE_MARK
+from autotailor.models import TailoredBullet, TailoredResume
+from autotailor.resume.verify import verify_resume
+
+WORDING = {
+    "light": "Copy each bullet's text as written. Where the bullet already says something the posting "
+    "names with a different word, you may use the posting's word instead (\"made charts\" -> \"data "
+    "visualization\"). Change only those few words; keep the rest, including the sentence structure, exactly.",
+    "off": "Copy each bullet's text exactly as written in the profile, word for word.",
+}
+
+
+def effective_limits(limits: TailorSettings, cv: MasterCV) -> TailorSettings:
+    """Bullet limits for this CV: a usual resume longer than max_bullets raises the maximum,
+    so starting from it is never an error."""
+    base = len(cv.base_bullets())
+    if base + 4 <= limits.max_bullets:
+        return limits
+    return limits.model_copy(update={"max_bullets": base + 4})
+
+
+def _known_id(sid: str, bullets: dict) -> str:
+    """A mistyped bullet ID mapped to the real one when that's unambiguous: the right name
+    with the wrong section prefix ('exp-calhacks-pipeline' for 'proj-calhacks-pipeline'),
+    or a near-identical spelling. Verification still checks the text against that bullet."""
+    if sid in bullets:
+        return sid
+    tail = sid.split("-", 1)[-1]
+    same_tail = [i for i in bullets if i.split("-", 1)[-1] == tail]
+    if len(same_tail) == 1:
+        return same_tail[0]
+    close = difflib.get_close_matches(sid, list(bullets), n=2, cutoff=0.9)
+    return close[0] if len(close) == 1 else sid
+
+
+def clean_draft(resume: TailoredResume, cv: MasterCV, rewording: str) -> TailoredResume:
+    """Small fixes that need no retry: mistyped IDs, the (usual) mark copied into the text,
+    skills the CV doesn't list (dropped: the resume shows only CV skills anyway), and with
+    rewording off, every bullet's text set to the CV's (so it is word for word)."""
+    bullets = cv.bullets()
+    fixed = []
+    for b in resume.bullets:
+        text = b.text.strip()
+        if text.startswith(BASE_MARK):
+            text = text[len(BASE_MARK):].strip()
+        sid = _known_id(b.source_id.strip().strip("[]"), bullets)
+        if rewording == "off" and sid in bullets:
+            text = bullets[sid].text
+        fixed.append(b.model_copy(update={"source_id": sid, "text": text}))
+    known = {" ".join(s.lower().split()): s for g in cv.skills for s in g.items}
+    skills = list(dict.fromkeys(known[k] for k in (" ".join(s.lower().split()) for s in resume.skills) if k in known))
+    return resume.model_copy(update={"bullets": fixed, "skills": skills})
 
 if TYPE_CHECKING:  # names used only in type hints; not available at runtime
     from langchain_core.language_models import BaseChatModel
     from langgraph.graph.state import CompiledStateGraph
 
 
-# TODO(you): define the graph's state, e.g. class TailorState(TypedDict): ...
-class TailorState(TypedDict):
-  posting: str
-  profile: str
-  resume: TailoredResume | None
-  errors: list[str]
-  attempts: int
+class TailorState(TypedDict, total=False):
+    posting: str  # input: the posting text
+    profile: str  # input: the candidate profile with [bullet-id] markers
+    resume: TailoredResume | None  # the latest draft
+    errors: list[str]  # the latest draft's problems ([] when it passed)
+    attempts: int  # drafts made so far
+    history: Annotated[list[dict], operator.add]  # every draft: {"attempt", "bullets", "errors"}
+
 
 def build_graph(llm: BaseChatModel, cv: MasterCV, limits: TailorSettings) -> CompiledStateGraph:
-    """TODO(you): build and compile the draft -> verify -> (retry | END) graph."""
+    """The draft -> verify -> (retry | END) graph for one posting."""
+    limits = effective_limits(limits, cv)
     prompt = load_prompt("tailor", TailoredResume).partial(
-        min_bullets=str(limits.min_bullets), max_bullets=str(limits.max_bullets)
+        min_bullets=str(limits.min_bullets), max_bullets=str(limits.max_bullets), wording=WORDING[limits.rewording]
     )
     draft_chain = prompt | llm.with_structured_output(TailoredResume)
-    def draft(state: TailorState):
+
+    def draft(state: TailorState) -> dict:
         errors = state.get("errors", [])
         feedback = "\n".join(errors) if errors else ""
         resume = draft_chain.invoke({"posting": state["posting"], "profile": state["profile"], "feedback": feedback})
+        resume = clean_draft(resume, cv, limits.rewording)
         return {"resume": resume, "attempts": state.get("attempts", 0) + 1}
-    
-    def verify(state: TailorState):
-        return {"errors": verify_resume(state["resume"], cv, limits)}
 
-    def route(state: TailorState):
+    def verify(state: TailorState) -> dict:
+        errors = verify_resume(state["resume"], cv, limits)
+        entry = {
+            "attempt": state["attempts"],
+            "bullets": [b.source_id for b in state["resume"].bullets],
+            "errors": errors,
+        }
+        return {"errors": errors, "history": [entry]}  # history appends (list reducer)
+
+    def route(state: TailorState) -> str:
         if not state["errors"] or state["attempts"] >= limits.max_attempts:
             return "done"
         return "retry"
 
-    graph: StateGraph = StateGraph(TailorState)
-
+    graph = StateGraph(TailorState)
     graph.add_node("draft", draft)
     graph.add_node("verify", verify)
-
     graph.add_edge(START, "draft")
     graph.add_edge("draft", "verify")
     graph.add_conditional_edges("verify", route, {"retry": "draft", "done": END})
-
     return graph.compile()
 
 
@@ -152,34 +139,39 @@ class TailorResult(NamedTuple):
     resume: TailoredResume | None
     errors: list[str]
     attempts: int
-    history: list[dict] = []  # one entry per draft, when the graph keeps a history (M10 exercise)
+    history: list[dict] = []  # one entry per draft
+    note: str | None = None  # set when the usual resume was used because no draft passed
+
+
+FALLBACK_NOTE = "No draft passed verification, so this is your usual resume, reordered and filled for the posting."
+
+
+def usual_resume(cv: MasterCV, last: TailoredResume | None = None) -> TailoredResume | None:
+    """The usual resume (bullets marked `base`), word for word, keeping the last draft's skills
+    and keywords; None if no bullet is marked."""
+    ids = cv.base_bullets()
+    if not ids:
+        return None
+    bullets = cv.bullets()
+    chosen = [b.source_id for b in (last.bullets if last else []) if b.source_id in ids]
+    order = list(dict.fromkeys([*chosen, *ids]))  # the draft's picks (most relevant) first
+    return TailoredResume(
+        bullets=[TailoredBullet(source_id=i, text=bullets[i].text) for i in order],
+        skills=list(last.skills) if last else [], keywords=list(last.keywords) if last else [],
+    )  # fmt: skip
 
 
 def tailor_posting(posting: str, profile: str, cv: MasterCV, settings: Settings) -> TailorResult:
-    """Run the graph for one posting with the `tailor` step's model. Given."""
+    """Run the graph for one posting with the `tailor` step's model. If no draft passes and
+    the CV marks a usual resume, that is used instead (with `note` saying so)."""
     graph = build_graph(get_chat_model(settings, "tailor"), cv, settings.tailor)
     final = graph.invoke({"posting": posting, "profile": profile})
-    history = [h if isinstance(h, dict) else dict(h) for h in final.get("history", [])]
-    return TailorResult(final.get("resume"), list(final.get("errors", [])), final.get("attempts", 0), history)
-
-
-# ------------------------------------------------------------------------------
-# M10 exercise: keep every draft, not just the last
-# ------------------------------------------------------------------------------
-#
-# Right now each draft replaces the previous one in the state, so only the last
-# draft and its problems survive. The UI's Resume tab can show every attempt if
-# the final state also has a "history" key: a list with one entry per draft,
-#
-#     {"attempt": 1, "bullets": ["exp-a", "proj-b", ...], "errors": ["Bullet 2: ...", ...]}
-#
-# (bullets: the source_ids that draft chose; errors: what verify found, [] if it passed).
-#
-# This is what reducers are for (concept 2 at the top of this file):
-#
-#     history: Annotated[list[dict], operator.add]
-#
-# then return {"history": [entry]} from the node that knows both the draft and
-# its errors, and LangGraph appends it. Check with:
-#
-#     uv run pytest tests/test_m4_tailor_graph.py -k history
+    history = [dict(h) for h in final.get("history", [])]
+    resume, errors, attempts = final.get("resume"), list(final.get("errors", [])), final.get("attempts", 0)
+    if resume is None or errors:
+        fallback = usual_resume(cv, resume)
+        if fallback is not None and not verify_resume(fallback, cv, effective_limits(settings.tailor, cv)):
+            history.append({"attempt": attempts + 1, "bullets": [b.source_id for b in fallback.bullets],
+                            "errors": [], "note": FALLBACK_NOTE})  # fmt: skip
+            return TailorResult(fallback, [], attempts, history, FALLBACK_NOTE)
+    return TailorResult(resume, errors, attempts, history)

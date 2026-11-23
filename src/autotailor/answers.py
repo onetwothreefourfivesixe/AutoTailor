@@ -1,6 +1,6 @@
 """Short-answer questions (M8): suggest points from the CV, then (opt-in) a drafted answer.
 
-`AnswerTools` is what the answer graph (the M8 exercise, chains/answer_graph.py)
+`AnswerTools` is what the answer graph (chains/answer_graph.py)
 calls for everything that isn't drafting or humanizing:
 
 - `suggest`: the 2-5 CV experiences worth mentioning (a model call, checked:

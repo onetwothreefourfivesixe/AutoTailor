@@ -91,14 +91,7 @@ def detail(pid: str, settings) -> None:  # noqa: ANN001
         _ai_tab(calls)
 
 
-def highlight(text: str, quotes: list[str]) -> str:
-    """HTML of `text` with each quote marked (matched ignoring case and spacing)."""
-    out = html.escape(text)
-    for q in sorted({q.strip(" .\"'") for q in quotes if q.strip()}, key=len, reverse=True):
-        words = [re.escape(html.escape(w)) for w in q.split()]
-        if words:
-            out = re.sub(r"\s+".join(words), lambda mt: f"<mark>{mt.group(0)}</mark>", out, flags=re.I)
-    return out.replace("\n", "<br>")
+from autotailor.ui.logic import highlight  # noqa: E402  (shared with the API)
 
 
 def _posting_tab(p) -> None:  # noqa: ANN001

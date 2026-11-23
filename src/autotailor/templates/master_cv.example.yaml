@@ -4,6 +4,11 @@
 #   - Every entry and every bullet needs a unique `id` (lowercase, digits, - and _).
 #   - Keep IDs stable once written: past runs refer to them.
 #   - `tags` help matching (skills, domains). Use as many as are true.
+#   - `base: true` on a bullet puts it on your usual resume. Tailoring starts from those
+#     bullets and adjusts them per posting (swapping projects, more bullets for the jobs
+#     that match best), keeping your wording.
+#   - `stack` lists an entry's tools; it's shown after the title ("Intern | Python, FastAPI").
+#   - `hidden: true` on an entry keeps it here (for scoring and short answers) but off resumes.
 
 contact:
   name: Your Name
@@ -30,11 +35,13 @@ experience:
     location: Remote
     start: "2026-06"
     end: "2026-08"
+    stack: [Python, FastAPI, PostgreSQL]
     tags: [backend, python]
     bullets:
       - id: exp-acme-intern-api
         text: Built a REST API in Python serving 2k requests per minute, cutting report generation time by 40%.
         tags: [python, api, performance]
+        base: true
       - id: exp-acme-intern-tests
         text: Added integration tests covering the billing pipeline, raising coverage from 55% to 80%.
         tags: [testing, python]

@@ -75,6 +75,12 @@ def create_app(home: Path | None = None, cors_origins: list[str] | None = None) 
 
     app.state.paths = paths
     _routes(app)
+    from autotailor import api_more
+
+    api_more.register(app, _conn, _settings, _paths, _need)
+    from autotailor import api_setup
+
+    api_setup.register(app, _conn, _settings, _paths, _need)
     return app
 
 
@@ -83,7 +89,7 @@ def _paths(request: Request) -> Paths:
 
 
 def _conn(request: Request) -> Iterator[Any]:
-    conn = db.connect(_paths(request).db)
+    conn = db.connect(_paths(request).db, any_thread=True)
     try:
         yield conn
     finally:
@@ -426,6 +432,8 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
 
         try:
             return load_master_cv(_paths(request).master_cv).model_dump(mode="json")
+        except FileNotFoundError as e:
+            raise HTTPException(404, "No master CV yet: run `autotailor init`, then fill in cv/master.yaml.") from e
         except (OSError, ValueError) as e:
             raise HTTPException(500, f"Can't read the master CV: {e}") from e
 

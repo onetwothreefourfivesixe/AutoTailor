@@ -1,7 +1,6 @@
-"""M7 exercise tests: the resolve graph (interrupt, resume with Command, inspecting a paused thread).
+"""Tests for the Runway resolve graph (chains/resolve_graph.py): interrupt, resume, inspecting a paused thread.
 
-Expected to fail (shown as `x`) until chains/resolve_graph.py is written. The
-resolver is a fake: no network, no database.
+The resolver is a fake: no network, no database.
 """
 
 from __future__ import annotations
@@ -10,8 +9,6 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from autotailor.chains.resolve_graph import Outcome, build_resolve_graph, run_resolve
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M7 exercise not written yet")
 
 
 class FakeResolver:

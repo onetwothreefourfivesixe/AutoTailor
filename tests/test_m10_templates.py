@@ -79,3 +79,36 @@ def test_pdf_preview_and_page_count():
 def test_jake_compiles_with_tectonic(tmp_path):
     r = render_resume(LAYOUT, "jake", tmp_path, REPO_TOOLS)
     assert r.template == "jake" and r.warning is None and pdf_page_count(r.pdf) == 1
+
+
+def test_tectonic_download_installs_the_binary(tmp_path, monkeypatch):
+    """The first LaTeX render downloads Tectonic; the archive's binary ends up in data/tools."""
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        data = b"#!/bin/sh\necho tectonic\n"
+        info = tarfile.TarInfo("tectonic-0.17.0/tectonic")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    archive = buf.getvalue()
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_bytes(self):
+            yield archive
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("httpx.stream", lambda *a, **k: Stream())
+    exe = latex.ensure_tectonic(tmp_path / "tools")
+    assert exe == tmp_path / "tools" / "tectonic" and exe.read_bytes().startswith(b"#!/bin/sh")
+    assert exe.stat().st_mode & 0o111

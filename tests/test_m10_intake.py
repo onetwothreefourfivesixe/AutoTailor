@@ -50,15 +50,15 @@ def test_read_files():
     assert "too short" in intake.read_file("short.txt", b"hi", extract, s).error
 
 
-def test_pasted_raw_email_and_unwritten_chain():
+def test_pasted_raw_email_and_model_errors():
     s = Settings()
     assert intake.read_text(FIXTURE.read_text(), extract, s).kind == "email"
 
-    def unwritten(text):
-        raise NotImplementedError
+    def unavailable(text):
+        raise ConnectionError("Ollama is not running")
 
-    c = intake.read_text(POSTING, unwritten, s)
-    assert c.kind == "error" and "M1 extraction chain" in c.error
+    c = intake.read_text(POSTING, unavailable, s)
+    assert c.kind == "error" and "Ollama is not running" in c.error
 
 
 def test_urls_refuse_no_fetch_sites():

@@ -1,4 +1,4 @@
-"""M8 exercise: short answers. Suggest points, let the user opt in, draft, humanize, check.
+"""Short answers: suggest points, opt in to a draft, humanize, check.
 
     START -> suggest -> choose --(points only)--> END
                           |
@@ -8,72 +8,17 @@
                                     ^          |
                                     +----------+  (problems: humanize again with them as feedback)
 
-- suggest: tools.suggest(question_id) -> the 2-5 CV points worth mentioning.
-- choose:  interrupt() with the question and the points. The user answers
-           {"draft": False}                      keep the points only, or
-           {"draft": True, "use": [1, 3], "notes": "..."}
-           ("use": 1-based point numbers, default all; "notes": optional extra direction).
-- draft:   your writing chain turns the chosen points into an answer.
-- humanize: your second chain rewrites it so it doesn't read as AI-written
-           (the "humanize" prompt in structured_prompts.json carries the rubric).
-- check:   tools.check(...) -> problems: invented numbers or names, over the word
-           limit, stock AI phrasing. Problems go back to humanize as feedback.
+- suggest: tools.suggest(question_id), the 2-5 CV points worth mentioning.
+- choose:  interrupt() with the question and the points. The answer is
+           {"draft": False} (keep the points) or
+           {"draft": True, "use": [1, 3], "notes": "..."} (1-based point numbers, default all).
+- draft:   the "draft_answer" prompt turns the chosen points into prose.
+- humanize: the "humanize" prompt removes the usual signs of AI writing.
+- check:   tools.check(...): invented numbers or names, the word limit, stock
+           AI phrasing. Problems go back to humanize as feedback.
 
-`tools` (autotailor/answers.py, given):
-- tools.suggest(question_id) -> list[dict]          each {"source_id", "point", "why", "cv_text"}
-- tools.question(question_id) -> dict               {"question_id", "question", "word_limit", "company", "title"}
-- tools.draft_inputs(question_id, chosen, notes) -> dict       variables for your draft prompt
-- tools.humanize_inputs(question_id, text, problems) -> dict   variables for the humanize prompt
-- tools.check(question_id, text, chosen, notes) -> list[str]   [] when the answer is clean
-
-You implement everything marked TODO, plus the "draft_answer" prompt in
-structured_prompts.json, with the variables {question}, {company}, {title},
-{word_limit}, {points} and {notes}. Check your work with:
-
-    uv run pytest tests/test_m8_answer_graph.py
-
-Then for real: `autotailor answers add <posting id> "Why do you want to work here? (150 words)"`,
-`autotailor answers run`.
-
-------------------------------------------------------------------------------
-New this time
-------------------------------------------------------------------------------
-
-1. Plain-text output.  Drafting produces prose, not a schema, so there is no
-   with_structured_output. A model returns an AIMessage; StrOutputParser turns
-   it into a str:
-
-       from langchain_core.output_parsers import StrOutputParser
-       chain = prompt | llm | StrOutputParser()
-       text = chain.invoke({...})          # -> str
-
-2. Two models.  `draft_llm` and `humanize_llm` may be different models (the
-   "tailor" and "humanize" steps in config.toml), so build two chains.
-
-3. Everything else you've seen: an interrupt for the opt-in (M7), a check/retry
-   loop with feedback and an attempts limit (M4), a checkpointer and a thread
-   per question (M5, M7). Keep `suggest` out of the node that interrupts: it is
-   a model call, and that node re-runs on resume.
-
-------------------------------------------------------------------------------
-Contract (the tests check these)
-------------------------------------------------------------------------------
-
-- build_answer_graph(tools, draft_llm, humanize_llm, checkpointer, max_attempts)
-  returns a compiled graph with nodes "suggest", "choose", "draft", "humanize"
-  and "check". Input state: {"question_id": int}.
-- The interrupt payload is tools.question(...) plus "points" (the suggested list).
-- Only the chosen points reach the draft prompt; the user's notes do too.
-- Each humanize pass edits the latest text; after a failed check, the next
-  humanize prompt includes the problems. At most max_attempts humanize passes.
-- run_answer(graph, question_id, decision=None) -> Outcome, like run_resolve:
-    - no decision, new thread: run it; no decision, started thread: report it
-      without running anything; a decision: resume the waiting thread with it
-      (ValueError if it isn't waiting).
-    - Outcome.status: "waiting" (payload: the interrupt payload), "points"
-      (payload: {"points": [...]}), "drafted" (clean) or "needs_review"
-      (problems left after max_attempts). For the last two the payload is
-      {"points", "chosen", "text", "problems", "attempts"}.
+Both writing chains return plain text (StrOutputParser) and may use different
+models (the `tailor` and `humanize` steps). One checkpoint thread per question.
 """
 
 from __future__ import annotations
@@ -100,7 +45,7 @@ class Outcome(NamedTuple):
 
 
 def thread_id(question_id: int) -> str:
-    """One checkpoint thread per question. Given."""
+    """One checkpoint thread per question."""
     return f"answer-{question_id}"
 
 
@@ -178,7 +123,7 @@ def build_answer_graph(
         return {"text": text, "attempts": state.get("attempts", 0) + 1}
 
     def check(state: AnswerState) -> dict:
-        # Deterministic, like M4's verify: invented numbers/names, word limit, AI phrasing.
+        # Deterministic: invented numbers or names, the word limit, AI phrasing.
         problems = tools.check(state["question_id"], state["text"], state["chosen"], state.get("notes", ""))
         if not problems:
             return {"problems": [], "outcome": "drafted"}
@@ -220,7 +165,7 @@ def build_answer_graph(
 
 
 def _outcome(values: dict[str, Any], interrupts: Any) -> Outcome:
-    """A paused or finished state -> Outcome (same idea as M7's run_resolve)."""
+    """A paused or finished state -> Outcome."""
     if interrupts:  # paused at choose: the payload is what choose passed to interrupt()
         return Outcome("waiting", interrupts[0].value)
     if values["outcome"] == "points":
@@ -230,7 +175,11 @@ def _outcome(values: dict[str, Any], interrupts: Any) -> Outcome:
 
 
 def run_answer(graph: CompiledStateGraph, question_id: int, decision: dict[str, Any] | None = None) -> Outcome:
-    """Start, inspect, or resume the thread for `question_id`."""
+    """Start, inspect, or resume the thread for `question_id`.
+
+    Status "waiting" (payload: the question and points), "points" (payload: the points),
+    "drafted" or "needs_review" (payload: points, chosen, text, problems, attempts).
+    """
     config = {"configurable": {"thread_id": thread_id(question_id)}}
     snapshot = graph.get_state(config)  # reads the checkpoint; runs nothing
 

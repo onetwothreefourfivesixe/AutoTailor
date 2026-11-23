@@ -1,6 +1,5 @@
-"""M5 exercise tests: the batch graph (fan-out with Send, checkpoints, resume).
+"""Tests for the batch graph (chains/batch_graph.py): fan-out with Send, checkpoints, resume.
 
-These are expected to fail (shown as `x`) until chains/batch_graph.py is written.
 `work` is a fake here: no model is called.
 """
 
@@ -13,8 +12,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from autotailor.batch import Job, JobResult
 from autotailor.chains.batch_graph import build_batch_graph, run_batch
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M5 exercise not written yet")
 
 
 def _jobs(n: int) -> list[Job]:

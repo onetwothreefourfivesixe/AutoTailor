@@ -8,9 +8,9 @@ Every chain and graph node asks for its model by step name:
 Which provider and model that returns is decided entirely by `config.toml`, so
 swapping a cloud model for a local one never touches chain code.
 
-LangChain concept: `init_chat_model` returns a `BaseChatModel`. Every provider's
-chat model implements that same interface (`.invoke`, `.stream`,
-`.with_structured_output`, ...), which is what makes them interchangeable.
+`init_chat_model` returns a `BaseChatModel`; every provider's chat model has the
+same interface (`.invoke`, `.stream`, `.with_structured_output`, ...), which is
+what makes them interchangeable.
 """
 
 from __future__ import annotations

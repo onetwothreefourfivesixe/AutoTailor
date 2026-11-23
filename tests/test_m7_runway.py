@@ -289,16 +289,12 @@ def test_cli_mail_import_and_runway_list(home):
     assert "Acme Robotics | Software Engineering Intern" in r.output and "95%" in r.output
 
 
-def test_cli_resolve_without_graph_matches_automatically_only(home, monkeypatch):
-    def unwritten(*a, **k):
-        raise NotImplementedError
-
-    monkeypatch.setattr("autotailor.chains.resolve_graph.build_resolve_graph", unwritten)
+def test_cli_resolve_auto_leaves_unmatched_roles_waiting(home):
     runner = CliRunner()
     runner.invoke(app, ["mail", "import"])
-    r = runner.invoke(app, ["runway", "resolve"])
+    r = runner.invoke(app, ["runway", "resolve", "--auto"])
     assert r.exit_code == 0, r.output
-    assert "not written yet" in r.output and "0 resolved, 0 skipped, 3 waiting" in r.output
+    assert "0 resolved, 0 skipped, 3 waiting" in r.output
     conn = db.connect(home / "data" / "autotailor.db")
     assert db.get_posting(conn, "runway:rwjob0001aaaa").status == PostingStatus.NEEDS_LINK
     conn.close()

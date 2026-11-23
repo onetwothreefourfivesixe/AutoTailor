@@ -1,9 +1,9 @@
 """Resolve Runway roles to the employer's own posting (M7).
 
 A Runway email gives a title, company and location but no description and no
-employer link. `Resolver` does the two concrete jobs; the resolve graph (the
-M7 exercise, chains/resolve_graph.py) decides when to do which and when to
-pause and ask the user:
+employer link. `Resolver` does the two concrete jobs; the resolve graph
+(chains/resolve_graph.py) decides when to do which and when to pause and ask
+the user:
 
 - `auto_match`: find the company's public job board (Greenhouse, Lever, Ashby)
   and the same role on it. Boards come from: one learned earlier for this
@@ -172,8 +172,6 @@ class Resolver:
                 found = from_text(text, self._extractor())
             else:
                 return "Give a URL, the posting text, or skip."
-        except NotImplementedError:
-            return "Reading a page that isn't on Greenhouse, Lever or Ashby needs the M1 extraction chain."
         except httpx.HTTPStatusError as e:
             return f"The page returned HTTP {e.response.status_code}."
         except (httpx.HTTPError, ValueError) as e:

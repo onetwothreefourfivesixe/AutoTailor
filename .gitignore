@@ -15,3 +15,7 @@ __pycache__/
 # Pasted postings (may contain personal page content)
 /posting.txt
 /postings/
+
+#Documents
+PLAN.md
+UI_PLAN.md

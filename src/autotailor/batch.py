@@ -4,7 +4,7 @@ A run is:
 
 1. `make_jobs`: one `Job` per shortlisted posting (posting text plus the
    profile the model sees), in rank order.
-2. The batch graph (the M5 exercise, chains/batch_graph.py) fans the jobs out,
+2. The batch graph (chains/batch_graph.py) fans the jobs out,
    runs `make_worker(...)` on each in parallel, and collects one `JobResult`
    per job. It is compiled with a SQLite checkpointer, keyed by run, so a run
    stopped part way (Ctrl-C, an error) resumes without redoing finished jobs.
@@ -86,7 +86,7 @@ def job_profile(base_profile: str, m: Match | None) -> str:
 def make_jobs(targets: list[tuple[JobPosting, Match | None]], cv: MasterCV, settings: Settings) -> list[Job]:
     from autotailor import matching
 
-    base = matching.profile_text(cv, settings.profile)
+    base = matching.profile_text(cv, settings.profile, for_resume=True)
     return [
         Job(index=i, posting_id=p.id, posting=matching.posting_text(p, 12000), profile=job_profile(base, m))
         for i, (p, m) in enumerate(targets, 1)
@@ -105,7 +105,7 @@ def make_worker(
     """The function the batch graph runs once per job: the M4 tailoring graph, with
     failures turned into a `failed` result so one bad posting doesn't stop the run.
 
-    NotImplementedError (exercise not written) and Cancelled still raise.
+    Cancelled still raises (Ctrl-C before the job started).
     """
     if tailor is None:
         from autotailor.chains.tailor_graph import tailor_posting as tailor
@@ -128,7 +128,7 @@ def make_worker(
                 return tailor(job["posting"], job["profile"], cv, settings)
 
             r = contextvars.Context().run(run)
-        except (NotImplementedError, Cancelled):
+        except Cancelled:
             raise
         except Exception as e:  # model errors, missing key, invalid output after retries
             return {**base, "message": f"{type(e).__name__}: {e}"}
@@ -140,7 +140,8 @@ def make_worker(
                 "attempts": r.attempts,
                 "message": f"the last of {r.attempts} drafts still had problems:",
             }
-        return {**base, "status": "tailored", "resume": r.resume.model_dump(), "attempts": r.attempts}
+        return {**base, "status": "tailored", "resume": r.resume.model_dump(), "attempts": r.attempts,
+                "message": getattr(r, "note", None)}  # fmt: skip
 
     return work
 
@@ -280,7 +281,7 @@ def save_results(
                     db.add_artifact(conn, run_id, p.id, kind.value, str(path.relative_to(outputs)), model)
                 row.files = {"pdf": w.pdf, "docx": w.docx, "posting": w.posting}
                 row.pages = w.pages
-                row.warning = w.warning
+                row.warning = " ".join(x for x in (r.get("message"), w.warning) if x) or None
                 if r.get("history"):  # shown on the posting's Resume tab
                     (w.folder / "attempts.json").write_text(json.dumps(r["history"], indent=1), encoding="utf-8")
         rows.append(row)

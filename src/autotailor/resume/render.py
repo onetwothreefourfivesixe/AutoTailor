@@ -89,9 +89,10 @@ def render_docx(layout: dict[str, Any], path: Path) -> None:
     for s in layout["sections"]:
         heading(s["title"])
         for e in s["items"]:
-            two_columns(e["left1"], e["right1"], bold=True)
+            stack = f" | {e['stack']}" if e.get("stack") else ""
+            two_columns(e["left1"] + (stack if e.get("stack_on") == "left1" else ""), e["right1"], bold=True)
             if e["left2"] or e["right2"]:
-                two_columns(e["left2"], e["right2"], italic=True, size=9.5)
+                two_columns(e["left2"] + (stack if e.get("stack_on") == "left2" else ""), e["right2"], italic=True, size=9.5)
             for b in e["bullets"]:
                 p = doc.add_paragraph(style="List Bullet")
                 p.paragraph_format.space_after = Pt(0)
@@ -110,7 +111,12 @@ def render_docx(layout: dict[str, Any], path: Path) -> None:
 
 # --- templates (M10) ---------------------------------------------------------------------------
 
-BUILTIN_TEMPLATES = {"jake": "Jake's Resume (LaTeX)", "typst": "AutoTailor classic (Typst)"}
+BUILTIN_TEMPLATES = {
+    "jake": "Jake's Resume (LaTeX)",
+    "jake-compact": "Jake's Resume, compact (LaTeX: 10pt, tech stack after titles, one-line leadership)",
+    "typst": "AutoTailor classic (Typst)",
+}
+_BUILTIN_TEX = {"jake": "jake.tex.j2", "jake-compact": "jake-compact.tex.j2"}
 
 
 @dataclass
@@ -128,7 +134,7 @@ def render_resume(layout: dict[str, Any], template: str, templates_dir: Path, to
 
     if template == "typst":
         return Rendered(render_pdf(layout), "typst")
-    source = latex.builtin("jake.tex.j2") if template == "jake" else (templates_dir / template).read_text(encoding="utf-8")
+    source = latex.builtin(_BUILTIN_TEX[template]) if template in _BUILTIN_TEX else (templates_dir / template).read_text(encoding="utf-8")
     tex = latex.render_tex(source, layout)
     try:
         return Rendered(latex.compile_pdf(tex, tools), template)
@@ -136,19 +142,31 @@ def render_resume(layout: dict[str, Any], template: str, templates_dir: Path, to
         return Rendered(render_pdf(layout), "typst", f"{e} Used the Typst template instead.")
 
 
-def pdf_to_png(pdf: bytes, scale: float = 1.6) -> bytes:
-    """First page of a PDF as PNG (pypdfium2), for previews of any template."""
+def pdf_to_png(pdf: bytes, scale: float = 1.6, all_pages: bool = True, gap: int = 16) -> bytes:
+    """A PDF as one PNG (pypdfium2), for previews of any template: every page, stacked
+    top to bottom with a gap between them (or only the first page)."""
     import io
 
     import pypdfium2 as pdfium
+    from PIL import Image
 
     doc = pdfium.PdfDocument(pdf)
     try:
-        img = doc[0].render(scale=scale).to_pil()
+        count = len(doc) if all_pages else 1
+        images = [doc[i].render(scale=scale).to_pil() for i in range(count)]
     finally:
         doc.close()
+    if len(images) == 1:
+        sheet = images[0]
+    else:
+        width = max(im.width for im in images)
+        sheet = Image.new("RGB", (width, sum(im.height for im in images) + gap * (len(images) - 1)), (200, 203, 209))
+        y = 0
+        for im in images:
+            sheet.paste(im, (0, y))
+            y += im.height + gap
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    sheet.save(buf, format="PNG")
     return buf.getvalue()
 
 

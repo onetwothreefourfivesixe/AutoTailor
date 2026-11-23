@@ -1,7 +1,7 @@
 """M5 plumbing: jobs, the worker, run limits, outputs, the run report, and the CLI.
 
-The batch graph itself is the user's exercise (test_m5_batch_graph.py); here it
-is replaced by a plain loop so these tests don't depend on it.
+The batch graph has its own tests (test_m5_batch_graph.py); here it is replaced
+by a plain loop so these tests focus on the plumbing.
 """
 
 from __future__ import annotations
@@ -73,12 +73,7 @@ def test_worker_results():
     assert broken["status"] == "failed" and "invalid JSON" in broken["message"]
 
 
-def test_worker_raises_for_unwritten_graph_and_after_cancel():
-    def unwritten(*a):
-        raise NotImplementedError
-
-    with pytest.raises(NotImplementedError):
-        batch.make_worker(CV, _settings(), tailor=unwritten)(_job("x"))
+def test_worker_raises_after_cancel():
     cancel = threading.Event()
     work = batch.make_worker(CV, _settings(), cancel, tailor=fake_tailor)
     assert work(_job("SWE Intern"))["status"] == "tailored"
@@ -230,20 +225,8 @@ def test_cli_run_limit(home, monkeypatch):
     r = runner.invoke(app, ["tailor", "--force"])
     assert r.exit_code == 1 and "Run limit reached: 1 runs today" in r.output
     assert runner.invoke(app, ["tailor", "--force", "--ignore-limits"]).exit_code == 0
-
-
-def test_cli_without_batch_graph_runs_one_at_a_time(home, monkeypatch):
-    def unwritten(*a, **k):
-        raise NotImplementedError("M5 exercise: implement build_batch_graph()")
-
-    monkeypatch.setattr("autotailor.chains.batch_graph.build_batch_graph", unwritten)
-    r = CliRunner().invoke(app, ["tailor"])
-    assert r.exit_code == 0, r.output
-    assert "batch graph is not written yet" in r.output and "1 tailored, 1 failed" in r.output
-
-
 def test_draft_history_is_saved_next_to_the_resume(home, monkeypatch):
-    """When the tailoring graph keeps a history (M10 exercise), every draft is saved as attempts.json."""
+    """Every draft the tailoring graph made is saved next to the resume as attempts.json."""
     import json
 
     history = [{"attempt": 1, "bullets": ["ghost"], "errors": ["Bullet 1: 'ghost' is not a bullet ID"]},

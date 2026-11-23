@@ -19,11 +19,8 @@ def _graph(conn, cv, settings):  # noqa: ANN001, ANN202
 
     with batch.open_checkpointer(paths().checkpoints) as saver:
         tools = AnswerTools(conn, cv, settings)
-        try:
-            graph = build_answer_graph(tools, get_chat_model(settings, "tailor"), get_chat_model(settings, "humanize"),
-                                       saver, settings.tailor.max_attempts)  # fmt: skip
-        except NotImplementedError:
-            graph = None
+        graph = build_answer_graph(tools, get_chat_model(settings, "tailor"), get_chat_model(settings, "humanize"),
+                                   saver, settings.tailor.max_attempts)  # fmt: skip
         yield graph, tools
 
 
@@ -86,13 +83,10 @@ def _question(conn, q, graph, tools, run_answer, model: str) -> None:  # noqa: A
         if q["status"] == "new":
             if st.button("Suggest points", key=f"sug{qid}"):
                 with st.spinner("Reading your CV ..."):
-                    if graph is None:
-                        db.update_question(conn, qid, status="points", points=tools.suggest(qid))
-                    else:
-                        _save(conn, qid, run_answer(graph, qid), model)
+                    _save(conn, qid, run_answer(graph, qid), model)
                 st.rerun()
             return
-        if q["status"] == "waiting" and graph is not None:
+        if q["status"] == "waiting":
             picked = [st.checkbox(f"{pt['point']}  ·  _{pt['why']}_", value=True, key=f"pt{qid}.{i}")
                       for i, pt in enumerate(points)]  # fmt: skip
             notes = st.text_input("Anything to add or stress (optional)", key=f"notes{qid}")

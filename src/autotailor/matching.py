@@ -8,7 +8,7 @@ Two stages:
    similarity of its 5 closest CV bullets, blended with its similarity to the
    user's role interests. Vectors are cached in SQLite, so only new or changed
    text is embedded on later runs.
-2. Fit score (model, M3 exercise). Only the best `run.shortlist_size`
+2. Fit score (model). Only the best `run.shortlist_size`
    postings by prescore go to the fit-scoring chain, which grades each against
    a rubric. The final fit score is computed here from those grades, with fixed
    weights, rather than asking the model to do the arithmetic.
@@ -169,9 +169,20 @@ def prescore_postings(
 # --- fit scores --------------------------------------------------------------
 
 
-def profile_text(cv: MasterCV, profile: Profile) -> str:
-    """The candidate as the fit-scoring model sees it: interests, education, skills, then every
-    CV bullet with its ID in [brackets] so the model can point at specific bullets."""
+BASE_MARK = "(usual)"
+
+
+def profile_text(cv: MasterCV, profile: Profile, for_resume: bool = False) -> str:
+    """The candidate as a model sees it: interests, education, skills, then every CV bullet
+    with its ID in [brackets] so the model can point at specific bullets.
+
+    `for_resume` (tailoring): hidden entries are left out, and bullets on the usual resume
+    (`base: true`) are marked BASE_MARK."""
+    base = set(cv.base_bullets()) if for_resume else set()
+
+    def bullet(b) -> str:  # noqa: ANN001
+        return f"- [{b.id}] {BASE_MARK + ' ' if b.id in base else ''}{b.text}"
+
     lines: list[str] = []
     if profile.role_interests:
         lines.append("Role interests: " + "; ".join(profile.role_interests))
@@ -184,8 +195,9 @@ def profile_text(cv: MasterCV, profile: Profile) -> str:
         status = "in progress" if e.status == "in_progress" else "completed"
         lines.append(f"- {e.level.value} in {e.field} ({status}{when}){', ' + e.school if e.school else ''}")
     for edu in cv.education:
-        for b in edu.details:
-            lines.append(f"- [{b.id}] {b.text}")
+        if for_resume and edu.hidden:
+            continue
+        lines.extend(bullet(b) for b in edu.details)
     if cv.skills:
         lines.append("")
         lines.append("Skills:")
@@ -195,14 +207,17 @@ def profile_text(cv: MasterCV, profile: Profile) -> str:
         ("Volunteer", cv.volunteer), ("Awards", cv.awards), ("Certifications", cv.certifications),
     ]  # fmt: skip
     for name, entries in sections:
+        entries = [e for e in entries if not (for_resume and e.hidden)]
         if not entries:
             continue
         lines.append("")
         lines.append(f"{name}:")
         for e in entries:
             parts = [e.title, e.organization, " – ".join(x for x in (e.start, e.end) if x)]
+            if e.stack:
+                parts.append("stack: " + ", ".join(e.stack))
             lines.append("## " + " | ".join(x for x in parts if x))
-            lines.extend(f"- [{b.id}] {b.text}" for b in e.bullets)
+            lines.extend(bullet(b) for b in e.bullets)
     return "\n".join(lines).strip()
 
 
@@ -244,10 +259,12 @@ def ranked(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPostin
     from autotailor.eligibility import passes_gate
 
     matches = db.all_matches(conn)
+    hidden = db.hidden_ids(conn)
     rows = [
         (p, matches[p.id])
         for p in db.list_postings(conn, None)
-        if p.id in matches and p.description and passes_gate(matches[p.id].verdict, settings.eligibility)
+        if p.id in matches and p.id not in hidden and p.description
+        and passes_gate(matches[p.id].verdict, settings.eligibility)
     ]
     rows.sort(
         key=lambda pm: (
@@ -279,8 +296,9 @@ def shortlist(conn: sqlite3.Connection, settings: Settings) -> list[tuple[JobPos
     run = settings.run
     picked: list[tuple[JobPosting, Match]] = []
     seen: set[str] = set()
+    applied = {r["posting_id"] for r in db.list_applications(conn)}
     for p, m in ranked(conn, settings):
-        if m.fit_score is None or m.fit_score < run.min_fit_score:
+        if m.fit_score is None or m.fit_score < run.min_fit_score or p.id in applied:
             continue
         key = dedupe_key(p.company, p.title)
         if key in seen:

@@ -1,8 +1,4 @@
-"""Tests for the M2 exercise in src/autotailor/chains/extract_requirements.py.
-
-As in M1: "xfail" until implemented, then normal tests (shown as "xpass").
-Delete the `pytestmark` line once everything passes.
-"""
+"""Tests for the requirements-extraction chain (chains/extract_requirements.py)."""
 
 import os
 from datetime import date
@@ -16,8 +12,6 @@ from autotailor.chains.extract_requirements import build_chain, build_prompt
 from autotailor.config import DegreeLevel
 from autotailor.eligibility import quote_found
 from autotailor.models import Requirements
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M2 exercise not done yet")
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TODAY = date(2026, 11, 17)

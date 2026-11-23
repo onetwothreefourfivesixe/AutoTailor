@@ -288,3 +288,15 @@ def run_model(run: sqlite3.Row) -> str:
         return f"{spec.get('provider', '?')}:{spec.get('model', '?')}"
     spec = s.models.for_step("tailor")
     return f"{spec.provider}:{spec.model}"
+
+
+def highlight(text: str, quotes: list[str]) -> str:
+    """HTML of `text` with each quote marked (matched ignoring case and spacing)."""
+    import html
+
+    out = html.escape(text)
+    for q in sorted({q.strip(" .\"'") for q in quotes if q.strip()}, key=len, reverse=True):
+        words = [re.escape(html.escape(w)) for w in q.split()]
+        if words:
+            out = re.sub(r"\s+".join(words), lambda mt: f"<mark>{mt.group(0)}</mark>", out, flags=re.I)
+    return out.replace("\n", "<br>")

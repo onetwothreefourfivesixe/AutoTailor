@@ -1,172 +1,166 @@
 # AutoTailor
 
-Local-first job matching and resume tailoring. It pulls job postings, keeps the ones you are eligible for, and tailors a resume from your master CV for the best matches. It never submits applications, and your data stays on your machine.
+**Spend your time applying, not sorting postings and rewriting your resume.**
 
-Status: early development. See [PLAN.md](PLAN.md) for the roadmap.
+AutoTailor is a job-search assistant for students and early-career applicants. It finds internships and jobs you're actually eligible for, ranks them by how well they fit you, and writes a tailored one-page resume for each of the best ones, using only what's in your own CV.
 
-## Setup
+## Why AutoTailor exists
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Applying for internships usually means hundreds of postings, and each one costs time before you've even applied:
+
+- **Most postings aren't open to you.** "Rising seniors only", "graduating 2027", "PhD students": you find out after reading the whole thing.
+- **One resume doesn't fit every role.** Recruiters and applicant-tracking systems look for the posting's own words, so a generic resume gets passed over, but rewriting it for every application takes an evening.
+- **Auto-apply tools have a price.** Most upload your CV and history to someone else's servers, and some apply on your behalf with resumes you never read, or with claims you never made.
+
+AutoTailor does the tedious part and leaves the decisions to you:
+
+- **Your data stays on your computer.** Your CV, the postings and everything AutoTailor produces are kept in files on your machine. You choose whether the AI models run locally (with [Ollama](https://ollama.com)) or in the cloud, step by step.
+- **It never applies for you.** It prepares the resume (and, if you ask, short-answer drafts); you read them and apply yourself.
+- **It doesn't make things up.** Every resume bullet comes from a bullet in your CV. A checker rejects anything new, such as a number, a tool or a company that isn't in your CV.
+
+Who it's for: anyone applying to many roles at once, especially students looking for internships, who wants tailored applications without handing their data to a service.
+
+> Status: early development, used daily by its author. Expect rough edges.
+
+**Contents:** [What it does](#what-it-does) · [Install](#install) · [First run](#first-run) · [Using the web app](#using-the-web-app) · [Where jobs come from](#where-jobs-come-from) · [Choosing AI models](#choosing-ai-models) · [Getting API keys](#getting-api-keys) · [Your resume's look](#your-resumes-look) · [Short answers](#short-answers) · [Privacy](#privacy) · [Troubleshooting](#troubleshooting) · [Command reference](#command-reference) · [Contributing](#contributing)
+
+## What it does
+
+1. **Collects postings** from company job boards (Greenhouse, Lever, Ashby), from links or text you paste in, and from Runway's notification emails.
+2. **Screens them**: reads each posting's requirements (degree level, graduation date, majors) and drops the ones you can't apply to. Each verdict shows the sentence it was based on, and you can override any verdict.
+3. **Ranks the rest** by how well they match your CV and interests.
+4. **Tailors a resume** for each of the top roles: it picks your most relevant bullets and lightly rewords them toward the posting, then checks the result against your CV. You get a PDF and a Word file, plus the posting and the reasons it was chosen.
+5. **Helps with short answers** (optional): it suggests which of your experiences answer a question and, only if you ask, drafts an answer.
+6. **Tracks your applications**: when you've applied, mark it, and follow it from applied to offer.
+
+## Install
+
+You need:
+
+- [Python 3.11+](https://www.python.org/downloads/) and [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- [Node.js](https://nodejs.org) 20.19 or later (22 LTS recommended) for the web app
+- Optionally [Ollama](https://ollama.com), to run the AI models on your own computer
+
+Then, in the project folder:
 
 ```bash
-uv sync
-uv run autotailor init      # creates config.toml, .env, cv/master.yaml, data/
-uv run autotailor doctor    # reports what is still missing
+uv sync                                   # install AutoTailor
+(cd web && npm install && npm run build)  # build the web app (once, and again after updating)
 ```
 
-Then:
+## First run
 
-1. Edit `config.toml`: add your education under `[[profile.education]]`, plus locations and interests.
-2. Edit `cv/master.yaml`: your full CV, with a unique `id` on every entry and bullet.
-3. Put the API key for your model provider in `.env` (see Models; not needed for Ollama).
+```bash
+uv run autotailor ui
+```
 
-`config.toml`, `.env`, `cv/` and `data/` hold personal data or secrets and are git-ignored.
+That's it: the first time, AutoTailor creates its settings and database, then opens a **setup wizard** in your browser (it prints a one-time sign-in link; on WSL, copy it into a Windows browser). The wizard walks you through:
 
-## Commands
+1. **Where the AI runs**: on your computer with Ollama (free and private), in the cloud with an API key (it shows you how to get one, step by step, and saves it on your computer), or a mix.
+2. **Your CV**: drag in your current resume or CV (PDF, Word, text or Markdown). AutoTailor reads it, sorts it into sections, and shows you the result to check before saving. Any line the AI didn't copy word for word is flagged. Include everything you might ever put on a resume; AutoTailor picks the right parts for each job.
+3. **About you**: your degree and expected graduation date (filled in from your CV), the roles you want, where you'd work.
+4. **Job boards**: tick the companies to follow from a list of 139, or add your own.
 
-| Command | What it does |
+Then press **Run the pipeline now**: AutoTailor fetches postings, screens and ranks them, and tailors resumes for the best ones. Progress shows in the task tray, bottom right; the results appear on the Today page. Press Ctrl-C in the terminal to stop the app.
+
+You can rerun the wizard any time from `/setup`, and change everything later under Settings and Master CV.
+
+<details>
+<summary>Prefer setting up by hand?</summary>
+
+Run `uv run autotailor init`, then edit `config.toml` (your `[profile]`: degrees, graduation date, locations, interests), `cv/master.yaml` (your CV; each entry and bullet needs a short unique `id`, as in the template), and `.env` (API keys, see [Getting API keys](#getting-api-keys)). Check with `uv run autotailor cv validate` and `uv run autotailor doctor`.
+
+```toml
+[[profile.education]]
+level = "bachelor"
+field = "Computer Science"
+status = "in_progress"
+graduation_date = 2029-05-31
+school = "UC Berkeley"
+```
+
+</details>
+
+## Using the web app
+
+| Page | What you do there |
 |---|---|
-| `autotailor init` | Create the config, CV template and database. Safe to re-run. |
-| `autotailor doctor` | Check config, CV, database and model credentials. |
-| `autotailor config show` | Print all settings. |
-| `autotailor config set <key> <value>` | Change one setting, e.g. `config set run.jobs_per_run 5`. |
-| `autotailor cv validate` | Check the master CV for errors and duplicate IDs. |
-| `autotailor fetch` | Pull postings from the job boards listed in `config.toml`, or one board with `-b greenhouse:figma`. |
-| `autotailor add <url>` | Add one posting by URL. Greenhouse, Lever and Ashby URLs need no model. |
-| `autotailor add --file posting.txt` | Add a posting from copied text (also accepts text piped on stdin). |
-| `autotailor jobs list` / `jobs show <id>` | Browse stored postings; `-v eligible` filters by verdict, `show` gives the reasons. |
-| `autotailor screen` | Check eligibility: titles first, then each posting's requirements against your profile. |
-| `autotailor screen --rejudge` | Recompute verdicts after changing your profile or `[eligibility]` rules; no model calls. |
-| `autotailor rank` | Rank eligible postings: local embedding similarity to your CV, then model fit scores for the top `run.shortlist_size`. |
-| `autotailor shortlist` | Show the postings that will be tailored next (fit ≥ `run.min_fit_score`, up to `run.jobs_per_run`). |
-| `autotailor tailor` | Tailor a resume (PDF and Word) for each shortlisted role, `run.parallel_jobs` at a time, into `data/outputs/<date>-run<N>/` with a `report.md`. Every resume must pass verification against your CV. |
-| `autotailor resume [run]` | Continue a run stopped with Ctrl-C or by an error; finished resumes are not redone. |
-| `autotailor runs` | Past runs: status, results and report location. |
-| `autotailor run` | The whole pipeline: Runway mail, `fetch`, Runway matching, `screen`, `rank`, `tailor`. |
-| `autotailor mail import [files]` | Import Runway emails saved as `.eml` into `data/inbox/` (or the files named). |
-| `autotailor mail pull` | Pull Runway emails from a Gmail label over IMAP (read-only). |
-| `autotailor mail listen` | Local mail server on 127.0.0.1 that accepts Runway emails forwarded from a desktop mail client. |
-| `autotailor answers add <posting> "<question>"` | Add an application's short-answer questions (or `--file`, one per blank-line-separated block). The limit is read from the text, e.g. "(150 words)". |
-| `autotailor answers run` | Suggest CV points for each question; draft and humanize the ones you opt in to. Output in `data/outputs/answers/`. |
-| `autotailor runway list` / `runway resolve` | Runway roles, and finding each one's posting on the employer's site (asks you when it can't). |
-| `autotailor models` | Which model each step uses, whether it's pulled in Ollama, and sizes. |
-| `autotailor compare <step> -m provider:model` | Rerun `extract`, `score`, `tailor` or `answers` on saved data with several models; report in `data/comparisons/`. Changes nothing stored. |
-| `autotailor api` | Local HTTP API at http://127.0.0.1:8765 (docs at `/docs`), for a custom frontend or a browser extension. |
-| `autotailor answers decide <id>` / `runway answer <id>` | Answer an opt-in or a Runway link question without prompts (`--draft/--points-only --use 1,3`, `--url/--text/--skip`). |
-| `autotailor worker` | Run queued background tasks (the UI starts it automatically). |
-| `autotailor ui` | Local web UI at http://127.0.0.1:8501: settings, master CV editor, runs and postings. |
+| **Today** | Start here. What needs your attention, your best eligible matches, and which AI model each step uses. |
+| **Jobs** | Every posting, with filters and saved views ("Eligible, no resume", "Applied", ...). Select several to tailor or hide them at once. |
+| **Job** | One posting in detail: the text with the requirement sentences highlighted, why it's eligible (or not), how well you fit, the tailored resume, short answers, and every AI call made for it. |
+| **Runway** | Roles from Runway emails, and the few that need you to paste the employer's link. |
+| **Applications** | A board of what you've applied to. Drag cards as you hear back. |
+| **Runs** | Each batch of tailored resumes, with downloads. |
+| **Master CV** | Edit your CV with a live preview of how a resume will look. |
+| **Settings** | Your profile, eligibility rules, limits, job sources, AI models, resume template. |
+| **Activity** | Everything that ran in the background, and every AI call. |
 
-### Web UI
+Handy anywhere:
 
-`autotailor ui` starts a local web UI. It listens on 127.0.0.1 only and has Streamlit's usage statistics switched off. On WSL, open the address in a Windows browser.
+- **Add** (press `A`, or drop a file anywhere on the page): paste job links or a posting's text, or drop `.pdf`, `.html`, `.txt` or Runway `.eml` files. You see what was read before anything is saved.
+- **Search** (`Ctrl K`, or `⌘ K` on a Mac): jump to any job or page, or start any task.
+- **Keyboard on the Jobs page:** `j`/`k` to move, `Enter` to open, `x` to select, `e`/`i` to mark eligible or ineligible, `t` to tailor, `h` to hide, `/` to search.
 
-- **Needs you**: everything waiting on you (Runway links, answer opt-ins, unclear verdicts near the top, resumes over a page, stopped runs), each with its action.
-- **Add jobs**: paste job links or a posting's text, or drop `.eml`, `.pdf`, `.html`, `.txt` files; a pasted raw email (Gmail "Show original") works too. Everything is previewed, editable, before it's saved.
-- **Runs**: start work (whole pipeline, fetch, screen, rank, tailor, Runway matching, answer points). It runs in a background worker process (`autotailor worker`, started for you), so you can leave the page; progress and output update live, and Stop works like Ctrl-C (finished resumes are kept; Resume continues).
-- **Postings** has a tab per stage: the text with the requirement quotes highlighted, eligibility with an **override** (wins everywhere, survives re-screening), fit with the cited CV bullets, the resume (preview of the saved PDF, diff against the CV, every draft attempt), answers, and the **AI log**: every model call for that posting with its prompt, response, model, time and tokens. The log stays on this machine and is kept 15 days (Settings > AI log).
+Long jobs (screening, ranking, tailoring) run in the background, so you can leave the page or close the browser. **Stop** in the task tray works like Ctrl-C: finished resumes are kept, and **Resume** on the Runs page picks up where it stopped.
 
-- **Overview**: which models run where, posting counts, the next shortlist, recent runs.
-- **Settings**: everything in `config.toml`. Saves are validated first, and the previous file is kept in `data/config_backups/`.
-- **Master CV**: edit, add, reorder and remove entries and bullets in every section, or edit the raw YAML. Saves are validated; the previous file is kept in `data/cv_backups/`. New entries and bullets get IDs when saved, and IDs never change. Deleting a bullet that a past resume used asks first and shows where it was used.
-- **Runs**: each run's resumes (PDF and Word downloads), each bullet beside the CV bullet it came from with reworded words marked, and the roles that weren't tailored, with reasons.
-- **Compare models**: comparison reports, with a summary table per model.
-- **Short answers**: add a posting's questions, see suggested points, pick which to draft from, and edit the drafts.
-- **Runway**: import emails, see each Runway role's status, and answer the roles waiting for an employer link.
-- **Postings**: every posting, including ineligible ones, with the requirements read from it (and the quoted evidence), the eligibility and fit reasons, and the full text.
+Prefer the terminal? Everything in the app is also a command; see the [Command reference](#command-reference). The previous, simpler interface is still available with `autotailor ui --classic`.
 
-Runs are started from the terminal, not the UI, so long model calls don't depend on a browser tab.
+### What you get for each job
 
-### Local API
+Each run creates a folder in `data/outputs/` (for example `2026-11-22-run3/`), with one subfolder per job:
 
-`autotailor api` serves everything the UI does over HTTP, on 127.0.0.1 only: overview and the Needs-you list, postings (with overrides and a resume preview image), runs and their files, background tasks (start by kind or by typed command, cancel, and a live event stream at `/api/tasks/{id}/events`), adding jobs and emails (preview, then save), the AI log, settings, the CV (validated; deleting bullets used in past resumes needs `confirm_delete_used`), Runway answers and short answers. Interactive documentation is at `/docs`.
+- `<your-name>-resume.pdf` and `<your-name>-resume.docx`: the tailored resume
+- `posting.md`: the posting, its apply link, and why it was eligible and chosen
+- `tailored.json`: which CV bullets were used
 
-Every request must send the token from `data/api_token` in the `X-AutoTailor-Token` header (or `?token=` for download links), and the `Host` header must be localhost. This keeps websites open in your browser from using the API. To develop a browser frontend, allow its origin: `autotailor api --cors http://localhost:5173`.
+The run's `report.md` links everything and lists any job that couldn't be tailored, with the reason. Always read a resume before you send it.
 
-### Resume templates
+### How a resume is tailored
 
-The PDF template is chosen in Settings > Resume template:
+1. **It starts from your usual resume.** Tick "usual" on the bullets of the resume you'd normally send (Master CV page, or `base: true` in `cv/master.yaml`; a CV imported in the setup wizard starts with every bullet ticked). For each posting the AI keeps what helps, drops what helps least (often a project unrelated to the job), adds CV bullets that fit better, and gives the jobs closest to the posting more bullets. Jobs and projects are listed most relevant first.
+2. **Your wording stays.** Bullets are copied as you wrote them; the AI may only swap in the posting's term for something a bullet already says ("data visualization" for "made charts"). A checker rejects any draft that rewrites a bullet in its own words, or adds tools, numbers or results your CV doesn't state, and the AI tries again. For word-for-word copies only, set Settings › Runs and limits › Bullet wording. If no draft passes, you get your usual resume, ordered and filled for the posting, with a note saying so.
+3. **The page is filled.** The rest of your usual resume goes in first, then your next most relevant CV bullets, word for word, until one more would spill onto a second page. A draft that runs over a page is trimmed from its least relevant end (your education lines stay). Turn this off under Settings › Runs and limits › "Fill the page".
+4. **Keyword match.** The job's Resume tab shows how many of the posting's key terms appear on the resume (80% or more is a strong match) and which are missing. If a missing one is true for you, add it to your CV and tailor again; AutoTailor never adds it for you.
 
-- **Jake's Resume** (default): the popular LaTeX template by Jake Gutierrez (MIT). LaTeX is compiled with [Tectonic](https://tectonic-typesetting.github.io/), which AutoTailor downloads into `data/tools/` on first use (no sudo). Tectonic then fetches the TeX packages it needs once; no resume content leaves the machine. If it can't be downloaded (offline), the Typst template is used with a warning.
-- **AutoTailor classic** (Typst).
-- **Your own LaTeX template**: download Jake's as a starting point, change the look, upload it. Values go in as `((( name )))`, statements as `((* for s in sections *))`; all text is escaped for LaTeX.
-- **Your own Word template** (`.docx`, docxtpl syntax `{{ name }}`) for the Word file.
+## Where jobs come from
 
-Preview any template with your own CV before saving.
-
-### Short answers
-
-For each question, AutoTailor first suggests 2-5 experiences from your CV that answer it, and stops there unless you ask for a draft. A draft is written from only the points you pick (plus any notes you add), then rewritten by the humanizer step, whose prompt removes the usual signs of AI writing (inflated claims, stock words like "delve" or "testament", em dashes, formulaic endings). Every draft is then checked: no numbers or names that aren't in the chosen experiences, your CV skills and profile, the posting or the question; within the word limit; none of the stock phrases. Problems go back to the humanizer, up to `tailor.max_attempts` times; anything left is listed for you to fix. Treat the result as a first draft.
-
-### Runs
-
-Each `tailor` (or `run`) is one run. Its folder holds one subfolder per role (PDF, Word, `tailored.json`, `posting.md` with the apply link and the eligibility and fit reasons) and `report.md`, which links them all and lists any role that wasn't tailored, with the reasons.
-
-`run.max_runs_per_day` and `run.max_runs_per_week` cap new runs (resuming doesn't count); `--ignore-limits` overrides them once. Press Ctrl-C to stop a run: jobs in progress finish and are saved, and `autotailor resume` does the rest. Progress is saved in `data/checkpoints.db`.
-
-## Job sources
-
-Company job boards are listed per ATS in `config.toml` by the company's slug, the name in its board URL (`boards.greenhouse.io/<slug>`, `jobs.lever.co/<slug>`, `jobs.ashbyhq.com/<slug>`):
+**Company job boards.** Most tech companies post on Greenhouse, Lever or Ashby. Add a company by the name in its job board's web address (its "slug") under Settings › Job sources, or in `config.toml`:
 
 ```toml
 [sources]
-title_include = ["intern", "internship", "co-op"]   # keep only matching titles; [] keeps all
-title_exclude = []
-greenhouse = ["figma"]
-lever = ["palantir"]
-ashby = ["openai"]
+title_include = ["intern", "internship", "co-op"]   # keep only these titles; [] keeps everything
+greenhouse = ["figma", "stripe"]    # boards.greenhouse.io/figma
+lever = ["palantir"]                # jobs.lever.co/palantir
+ashby = ["openai"]                  # jobs.ashbyhq.com/openai
 ```
 
-LinkedIn, Handshake, Runway, Indeed and Glassdoor are never fetched automatically, because their terms forbid it. For those, copy the posting text and use `autotailor add --file`.
+Many large companies (Apple, Google, Microsoft, Amazon, ...) use their own careers sites, which AutoTailor can't read. Paste those postings instead.
 
-### Runway
+**Pasted postings.** Use **Add** with a link or the posting's text. LinkedIn, Handshake, Indeed, Glassdoor and Runway don't allow automated access, so AutoTailor never opens their links: open the posting yourself and paste its text.
 
-Runway's terms forbid automated access to its site, so AutoTailor reads Runway's daily notification emails instead and never opens a Runway link. Each email gives a role's title, company, location and match score, but no description. AutoTailor then looks for the same role on the employer's own job board; when it can't find it, the role waits for you to open the Runway link in your browser and paste the employer's posting URL or text (`autotailor runway resolve`, or the Runway page of the UI).
+**Runway.** AutoTailor reads Runway's daily notification emails; it never visits Runway's site. Each email names the roles but has no details, so AutoTailor finds each role on the employer's own job board. When it can't, the role appears on the Runway page for you to paste the employer's link. Ways to bring the emails in, simplest first:
 
-Getting the emails in, from simplest:
+1. **Drop the file in:** in Gmail, open the email, choose ⋮ › Download message, and drop the `.eml` file onto the app (or save it into `data/inbox/`).
+2. **Gmail label (automatic):** make a Gmail filter that labels Runway's emails (from `hello@tower.joinrunway.io`), create a Google [app password](https://myaccount.google.com/apppasswords), then turn on Settings › Mail › IMAP and run `uv run autotailor mail login`. (On WSL, put `AUTOTAILOR_IMAP_PASSWORD=...` in `.env` instead.) AutoTailor only reads that label and never marks anything as read.
+3. **Forward from a desktop mail client:** run `uv run autotailor mail listen` and forward emails through the outgoing server `127.0.0.1:8025`.
 
-1. **Drop folder** (on by default): in Gmail, open the email, "⋮" > "Download message", save the `.eml` into `data/inbox/`, then `autotailor mail import` (or `autotailor run`).
-2. **Gmail label over IMAP**: add a Gmail filter that labels mail from `hello@tower.joinrunway.io` (e.g. "Runway"), create an app password, then `autotailor config set mail.imap true`, `config set mail.imap_user you@gmail.com`, `config set mail.imap_label Runway`, and `autotailor mail login`. Without a usable OS keyring (e.g. WSL), put `AUTOTAILOR_IMAP_PASSWORD=...` in `.env` instead. Pulls are read-only and never mark mail as read.
-3. **Local mail server**: `autotailor mail listen`, then in a desktop mail client add an outgoing server `127.0.0.1:8025` and forward Runway emails through it.
+## Choosing AI models
 
-Only email from `mail.allowed_senders` is read; everything else is ignored.
+AutoTailor uses AI for four steps: **extract** (reading requirements), **score** (judging fit), **tailor** (writing resumes and answer drafts) and **humanize** (polishing answers). It also uses an **embedding** model to pre-sort jobs. Each step can use a different model, set in Settings › Models.
 
-## Models
+| Provider | Runs | Needs |
+|---|---|---|
+| Ollama | on your computer | Ollama installed, and the model pulled (`ollama pull <name>`) |
+| Anthropic (Claude) | in the cloud | `ANTHROPIC_API_KEY` in `.env` |
+| OpenAI | in the cloud | `OPENAI_API_KEY` in `.env` |
+| Google Gemini | in the cloud | `GOOGLE_API_KEY` in `.env` |
 
-Each pipeline step (`extract`, `score`, `tailor`, `humanize`) uses `[models.default]` unless overridden under `[models.steps.<step>]`.
+API keys go in `.env` (one `NAME=value` per line), never in `config.toml`. See [Getting API keys](#getting-api-keys) for how to get one.
 
-| Provider | `provider` value | API key variable | Runs |
-|---|---|---|---|
-| Anthropic (Claude) | `anthropic` | `ANTHROPIC_API_KEY` | cloud |
-| OpenAI | `openai` | `OPENAI_API_KEY` | cloud |
-| Google Gemini | `google_genai` | `GOOGLE_API_KEY` | cloud |
-| Ollama | `ollama` | none | on your machine |
-
-Keys go in `.env`, one `NAME=value` per line; a variable already exported in your shell takes precedence. Keys are deliberately not in `config.toml`, because that file is printed by `config show` and saved with every run.
-
-`model` is the provider's own model ID (for Ollama, a name from `ollama list`). For example, to run one step locally:
+Three common setups in `config.toml`:
 
 ```toml
-[models.steps.extract]
-provider = "ollama"
-model = "qwen3-vl:4b-instruct"
-```
-
-Ranking also uses an embedding model, set under `[models.embeddings]`: local `nomic-embed-text` by default (`ollama pull nomic-embed-text`), or a cloud one.
-
-| Provider | `provider` value | Example `model` | Key |
-|---|---|---|---|
-| Ollama | `ollama` | `nomic-embed-text` | none |
-| OpenAI | `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
-| Google Gemini | `google_genai` | `gemini-embedding-001` | `GOOGLE_API_KEY` |
-
-Anthropic has no embeddings API, so with Claude for the chat steps, pick OpenAI or Gemini embeddings (or keep Ollama).
-
-### All local, mixed, or cloud only
-
-Any combination works; `autotailor doctor` reports which one you have.
-
-```toml
-# All local: nothing leaves your machine. Needs Ollama and enough RAM/VRAM.
+# Everything on your computer: nothing leaves it. Needs a decent GPU or patience.
 [models.default]
 provider = "ollama"
 model = "qwen3-vl:4b-instruct"
@@ -176,7 +170,7 @@ model = "nomic-embed-text"
 ```
 
 ```toml
-# Mixed: cheap steps local, writing in the cloud.
+# Mixed: quick steps on your computer, resume writing in the cloud.
 [models.default]
 provider = "ollama"
 model = "qwen3-vl:4b-instruct"
@@ -195,63 +189,149 @@ provider = "google_genai"
 model = "gemini-embedding-001"
 ```
 
-Ollama models read at most `context_window` tokens at once (default 16384, set per model block). Ollama's own default is much smaller and cuts long prompts without an error, so lower it only if you run short of memory.
-
-### Choosing models
-
-`autotailor compare` reruns one step on postings (or questions) you already have, once with the model the step uses now and once per `-m` model, and writes a side-by-side report:
+**Not sure which model is best?** Compare them on jobs you already have. AutoTailor reruns a step with another model and shows the results side by side, without changing anything you've saved:
 
 ```bash
-ollama pull gemma4:12b
-autotailor compare tailor  -m ollama:gemma4:12b -n 3     # verification pass rate, drafts needed, bullets chosen
-autotailor compare score   -m ollama:gemma4:12b -n 10    # rank agreement with your stored fit scores
-autotailor compare extract -m ollama:gemma4:12b          # same eligibility verdict as stored?
-autotailor compare answers -m ollama:gemma4:12b          # problems left after humanizing, word count
+uv run autotailor compare tailor -m ollama:gemma4:12b -n 3
 ```
 
-Every trial is timed, so quality and speed can be weighed together. A cloud model in the list asks before any data is sent. Then set the winner per step with `autotailor config set` or on the Settings page. Rough guide for local models: a model needs about its download size in GPU memory plus some for the context; anything larger spills into system RAM and runs several times slower.
+Results appear under Settings › Models. As a rough guide, a local model needs about its download size in GPU memory; bigger ones still work but run several times slower. `uv run autotailor models` shows which models you have and their sizes.
 
-Embedding vectors are cached per provider and model, so switching embedding models re-embeds everything once.
+## Getting API keys
 
-`autotailor doctor` shows, per step, whether data leaves your machine, and checks that the key for each cloud provider in use is set.
+You only need a key for the cloud providers you actually use; Ollama needs none. Cloud models are pay-per-use (Google also has a limited free tier), so set a spending limit in the provider's console when you create the key. Each key goes on its own line in `.env`:
 
-## Layout
-
-```
-src/autotailor/
-  config.py   settings (profile, eligibility rules, run limits, sources, mail, models)
-  models.py   job posting, requirements, match
-  cv.py       master CV schema
-  db.py       SQLite storage and schema migrations
-  llm.py      model factory
-  cli.py      command line
-  text.py     HTML to plain text
-  dedupe.py   duplicate detection across sources
-  ingest.py   title filter, dedupe and save
-  eligibility.py  title pass, requirements vs profile, verdicts
-  matching.py     embedding pre-rank, profile text, fit score, shortlist
-  batch.py        batch runs: jobs, worker, run limits, checkpoints, outputs, report.md
-  mail.py         Runway mail intake: drop folder, IMAP, local SMTP listener
-  resolve.py      Runway role -> employer posting (job board match, or your link/text)
-  answers.py      short answers: question parsing, suggested points, facts-and-style check
-  compare.py      model comparisons on saved data (M9)
-  api.py          local HTTP API (FastAPI) (M11)
-  tasks.py        background task queue and worker (M10)
-  intake.py       pasted/dropped jobs and emails, previews (M10)
-  ailog.py        local AI call log (LangChain callback) (M10)
-  inbox.py        the Needs-you list (M10)
-  ui/         Streamlit app (app.py, one page_*.py per page); logic.py holds the tested save/ID/diff helpers
-  resume/     verify.py (nothing beyond the CV), layout.py, render.py (templates, PDF, Word, previews), latex.py (Tectonic), output.py
-  sources/    ats.py (Greenhouse, Lever, Ashby), paste.py (URL or pasted text), runway.py (email parser)
-  chains/     LangChain steps: extract_posting.py (M1 exercise), extract_requirements.py (M2 exercise), score_fit.py (M3 exercise), tailor_graph.py (M4 exercise, LangGraph), batch_graph.py (M5 exercise, fan-out and checkpoints), resolve_graph.py (M7 exercise, interrupts), answer_graph.py (M8 exercise, opt-in drafting)
-              structured_prompts.json holds every step's prompt text and few-shot examples
-tests/
+```ini
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=AIza...
 ```
 
-## Tests
+### Anthropic (Claude)
 
-```bash
-uv run pytest
-```
+1. Sign in or create an account at [console.anthropic.com](https://console.anthropic.com).
+2. Add credit under **Settings › Billing** (the API is prepaid).
+3. Go to **Settings › API Keys** ([direct link](https://console.anthropic.com/settings/keys)), choose **Create Key**, and name it "AutoTailor".
+4. Copy the key (it starts with `sk-ant-`; it's shown only once) into `.env` as `ANTHROPIC_API_KEY=...`.
 
-Exercise tests show as `x` (expected failure) until the exercise is done. Tests that call a real model are skipped unless `AUTOTAILOR_LIVE=1` is set.
+### OpenAI
+
+1. Sign in or create an account at [platform.openai.com](https://platform.openai.com).
+2. Add a payment method under **Settings › Billing** ([direct link](https://platform.openai.com/settings/organization/billing)).
+3. Open **API keys** ([direct link](https://platform.openai.com/api-keys)) and choose **Create new secret key**.
+4. Copy the key (it starts with `sk-`; it's shown only once) into `.env` as `OPENAI_API_KEY=...`.
+
+### Google Gemini
+
+1. Sign in with a Google account at [Google AI Studio](https://aistudio.google.com).
+2. Open **Get API key** ([direct link](https://aistudio.google.com/app/apikey)) and choose **Create API key**.
+3. Copy the key (it starts with `AIza`) into `.env` as `GOOGLE_API_KEY=...`.
+4. The free tier has low rate limits, and its terms allow Google to use what you send to improve its products. For your CV and applications, consider enabling billing on the key's Google Cloud project, which switches to the paid terms. Check Google's current terms before deciding.
+
+### Ollama (no key)
+
+1. Install Ollama from [ollama.com/download](https://ollama.com/download) and start it.
+2. Download the models you set in `config.toml`, for example `ollama pull qwen3-vl:4b-instruct` and `ollama pull nomic-embed-text`.
+
+After adding keys or models, run `uv run autotailor doctor` to confirm each step can reach its model. Keep `.env` private: it's excluded from git, and you shouldn't paste keys into the app or share them. If a key leaks, delete it in the provider's console and create a new one.
+
+## Your resume's look
+
+Choose the template in Settings › Resume template, and preview it with your own CV before saving.
+
+- **Jake's Resume** (default): the popular clean, single-column LaTeX template by Jake Gutierrez. The first time you use it, AutoTailor downloads a small LaTeX engine ([Tectonic](https://tectonic-typesetting.github.io/)) into `data/tools/`, which takes about a minute; after that each resume takes a few seconds.
+- **Jake's Resume, compact**: the same look at 10pt with tighter margins (about twice the bullets per page), each job's or project's tech stack after its title (`stack:` in your CV), leadership entries on two lines, and one skills row per group.
+- **AutoTailor classic**: a simpler look that needs no download.
+- **Your own design**: download Jake's template from the same page, change it, and upload it. A Word (`.docx`) template is also supported, for the Word copy.
+
+Every resume should fit on one page. If one doesn't, the app tells you; lower "Most bullets" under Settings › Runs and limits.
+
+Entries you never want on a resume (high school once you're in college, an old certificate) can stay in your CV: tick "Hide from resumes" on the Master CV page (`hidden: true`). The skills section lists all your skills, the posting's first in each group; Settings › Runs and limits › Skills section can show only the posting's.
+
+## Short answers
+
+For an application's "Why do you want to work here?" style questions, open the job's **Answers** tab and add the question, with its limit if it has one, e.g. `(150 words)`. AutoTailor then:
+
+1. suggests 2 to 5 experiences from your CV that answer it, and stops there;
+2. only if you choose **Draft from these**, writes a draft from the experiences you ticked, plus any notes you add;
+3. rewrites the draft to remove the usual signs of AI writing (grand claims, stock phrases, em dashes);
+4. checks the draft adds nothing that isn't in your CV and stays within the word limit, and lists anything it couldn't fix.
+
+Edit the draft right there; it's a starting point, not a finished answer.
+
+## Privacy
+
+- Your profile, CV, postings, resumes and history live in this folder: `config.toml`, `.env`, `cv/` and `data/`. They're excluded from git, so they won't be committed by accident.
+- With local models, nothing about you leaves your computer. With a cloud model, the text that step needs (a posting, your CV) is sent to that provider. The app labels each step "on this machine" or "sent to …", and `autotailor doctor` lists them.
+- The app and its API only accept connections from your own computer, and the app needs a sign-in link from the terminal.
+- Every AI call is logged locally (prompt, response, timing) so you can see exactly what was sent; the log is deleted after 15 days. Change or turn this off in Settings › AI log.
+
+## Troubleshooting
+
+**"The web app isn't built yet"**: run `cd web && npm install && npm run build`, then `autotailor ui` again.
+
+**The sign-in link says it expired**: links work once, for 10 minutes. Run `uv run autotailor ui-login` for a new one (while the app is running).
+
+**A model step fails**: run `uv run autotailor doctor`. Common causes are a missing API key in `.env`, Ollama not running, or a model that isn't pulled (`ollama pull <name>`).
+
+**Most jobs show "unclear"**: their requirements haven't been read yet, or the model couldn't decide. Run screening (Today › Run pipeline, or `autotailor screen`); for the rest, open the job and set the verdict yourself.
+
+**A resume is two pages**: lower "Most bullets" in Settings › Runs and limits, or try the classic template.
+
+**Something else**: check Activity for the task's output, or run the same step in a terminal (e.g. `uv run autotailor screen`) to see the full error.
+
+## Command reference
+
+Everything the app does is also available in the terminal. Run any command with `--help` for its options. Prefix each with `uv run` (or activate the virtual environment).
+
+### Setup and settings
+
+| Command | What it does |
+|---|---|
+| `autotailor init` | Create settings, the CV template and the database (safe to re-run) |
+| `autotailor doctor` | Check that everything needed is in place |
+| `autotailor config show` / `config set <key> <value>` | Show or change a setting, e.g. `config set run.jobs_per_run 5` |
+| `autotailor cv validate` | Check your CV for mistakes |
+| `autotailor models` | Which model each step uses, and what's installed in Ollama |
+
+### Finding and screening jobs
+
+| Command | What it does |
+|---|---|
+| `autotailor run` | The whole pipeline: emails, fetch, screen, rank, tailor |
+| `autotailor fetch` | Pull postings from your job boards (or one: `-b greenhouse:figma`) |
+| `autotailor add <url>` / `add --file posting.txt` | Add one posting by link or text |
+| `autotailor screen` | Check eligibility (`--rejudge` recomputes after you change your profile, without AI calls) |
+| `autotailor rank` / `shortlist` | Rank eligible postings / show the ones that will be tailored next |
+| `autotailor jobs list` / `jobs show <id>` | Browse postings and see the reasons for each verdict |
+
+### Resumes and answers
+
+| Command | What it does |
+|---|---|
+| `autotailor tailor` | Tailor resumes for the shortlist (or name postings) |
+| `autotailor resume` / `runs` | Continue a stopped run / list past runs |
+| `autotailor answers add <posting> "<question>"` | Add an application question |
+| `autotailor answers run` | Suggest points for each question and draft the ones you choose |
+| `autotailor compare <step> -m provider:model` | Try another model on saved data |
+
+### Runway emails
+
+| Command | What it does |
+|---|---|
+| `autotailor mail import` | Import `.eml` files from `data/inbox/` |
+| `autotailor mail pull` / `mail login` | Pull from a Gmail label / store its app password |
+| `autotailor mail listen` | Accept forwarded emails on 127.0.0.1:8025 |
+| `autotailor runway list` / `runway resolve` | List Runway roles / find their employer postings |
+
+### The app
+
+| Command | What it does |
+|---|---|
+| `autotailor ui` | Start the web app and print a sign-in link (`--classic` for the older interface) |
+| `autotailor ui-login` | A new sign-in link for the running app |
+| `autotailor api` | Only the local API (for scripts; documentation at <http://127.0.0.1:8765/docs>) |
+
+## Contributing
+
+Bug reports and improvements are welcome. Questions? Find the maintainer on Discord: **1void_heart1**. See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is organized, how to run the tests, and how to propose a change. The roadmap and design notes are in [PLAN.md](PLAN.md) and [UI_PLAN.md](UI_PLAN.md).

@@ -5,7 +5,7 @@ Two passes feed one verdict:
 1. Title pass (no model). Titles such as "PhD Intern", "(Master's Degree)" or
    "New Grad 2027" settle many cases before any description is read.
 2. Requirements pass. The `Requirements` extracted from the description (M2
-   exercise chain) are compared with the profile in `config.toml`.
+   chain) are compared with the profile in `config.toml`.
 
 Verdicts: INELIGIBLE if any stated requirement clearly fails; UNCLEAR if
 something needed is missing or untrustworthy; ELIGIBLE otherwise.

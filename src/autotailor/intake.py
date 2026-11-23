@@ -64,8 +64,6 @@ def _text(source: str, text: str, extract: Callable[[str], Any], url: str | None
 
     try:
         return Candidate(source, "posting", posting=from_text(text, extract, url=url))
-    except NotImplementedError:
-        return Candidate(source, "error", error="Reading pasted text needs the M1 extraction chain.")
     except Exception as e:  # too short, model errors
         return Candidate(source, "error", error=str(e))
 
@@ -79,8 +77,6 @@ def read_urls(text: str, client: httpx.Client, extract: Callable[[str], Any]) ->
             out.append(Candidate(url, "posting", posting=from_url(client, url, extract)))
         except NoFetchError as e:
             out.append(Candidate(url, "error", error=str(e)))
-        except NotImplementedError:
-            out.append(Candidate(url, "error", error="This site isn't a supported job board; reading it needs the M1 extraction chain."))
         except httpx.HTTPStatusError as e:
             out.append(Candidate(url, "error", error=f"HTTP {e.response.status_code}"))
         except Exception as e:  # network, model

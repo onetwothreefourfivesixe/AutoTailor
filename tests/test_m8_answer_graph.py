@@ -1,7 +1,6 @@
-"""M8 exercise tests: the answer graph (opt-in interrupt, draft and humanize chains, check loop).
+"""Tests for the short-answer graph (chains/answer_graph.py): opt-in interrupt, draft and humanize, check loop.
 
-Expected to fail (shown as `x`) until chains/answer_graph.py is written. They also
-need your "draft_answer" prompt in structured_prompts.json. Models and tools are fakes.
+Models and tools are fakes.
 """
 
 from __future__ import annotations
@@ -12,8 +11,6 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 
 from autotailor.chains.answer_graph import build_answer_graph, run_answer
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M8 exercise not written yet")
 
 POINTS = [
     {"source_id": "exp-lab-detector", "point": "Trained a YOLO detector in PyTorch", "why": "ML depth", "cv_text": "..."},

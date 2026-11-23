@@ -260,13 +260,13 @@ def test_cli_rank_and_shortlist(home, monkeypatch):
     assert len(scored) == 2
 
 
-def test_cli_rank_without_chain(home, monkeypatch):
+def test_cli_rank_by_similarity_when_the_model_is_unavailable(home, monkeypatch):
     _store(home, (ML, Verdict.ELIGIBLE), (ACCT, Verdict.ELIGIBLE))
 
-    def unwritten(*args, **kwargs):
-        raise NotImplementedError
+    def unavailable(*args, **kwargs):
+        raise ConnectionError("Ollama is not running")
 
-    monkeypatch.setattr("autotailor.chains.score_fit.score_fit_batch", unwritten)
+    monkeypatch.setattr("autotailor.chains.score_fit.score_fit_batch", unavailable)
     r = CliRunner().invoke(app, ["rank"])
     assert r.exit_code == 0, r.output
     assert "Ranking by embedding similarity only" in r.output
@@ -367,3 +367,52 @@ def test_doctor_reports_mode_and_checks_ollama(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     out = runner.invoke(app, ["doctor"]).output
     assert "cloud only" in out and "FAIL OPENAI_API_KEY" in out and "Ollama" not in out
+
+
+def test_concurrent_first_opens_upgrade_once(tmp_path):
+    """Several processes or threads opening an old database at once: one upgrades, the rest wait."""
+    import threading
+
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    for script in (db._SCHEMA_V1, db._SCHEMA_V2):
+        raw.executescript(script)
+    raw.execute("PRAGMA user_version = 2")
+    raw.commit()
+    raw.close()
+
+    errors: list[BaseException] = []
+
+    def open_it():
+        try:
+            db.connect(path, any_thread=True).close()
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=open_it) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert "hidden" in {r[1] for r in conn.execute("PRAGMA table_info(postings)")}
+
+
+def test_a_failed_upgrade_leaves_the_previous_version(tmp_path, monkeypatch):
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    for script in (db._SCHEMA_V1, db._SCHEMA_V2):
+        raw.executescript(script)
+    raw.execute("PRAGMA user_version = 2")
+    raw.commit()
+    raw.close()
+    broken = dict(db._MIGRATIONS)
+    broken[4] = ("CREATE TABLE ok_so_far (x INTEGER);\nTHIS IS NOT SQL;", None)
+    monkeypatch.setattr(db, "_MIGRATIONS", broken)
+    with pytest.raises(sqlite3.OperationalError):
+        db.connect(path)
+    raw = sqlite3.connect(path)
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 2  # v3 isn't kept either: one transaction
+    assert not raw.execute("SELECT name FROM sqlite_master WHERE name = 'ok_so_far'").fetchone()

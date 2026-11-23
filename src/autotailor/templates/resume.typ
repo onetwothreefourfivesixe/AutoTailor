@@ -13,12 +13,18 @@
   block(spacing: 0.3em, stack(spacing: 2.5pt, text(size: 11.5pt, smallcaps(title)), line(length: 100%, stroke: 0.5pt)))
 }
 
+// "Title | Python, PyTorch": the entry's tech stack after its title, in plain text.
+#let with-stack(e, field, body) = {
+  let s = e.at("stack", default: "")
+  if s != "" and e.at("stack_on", default: "") == field { [#body#text(style: "normal", weight: "regular", size: 9pt)[ | #s]] } else { body }
+}
+
 #let entry(e) = {
   block(spacing: 0.35em, breakable: false)[
     #grid(columns: (1fr, auto), align: (left, right), row-gutter: 0.32em,
-      text(weight: "bold", e.left1), text(weight: "bold", e.right1),
+      with-stack(e, "left1", text(weight: "bold", e.left1)), text(weight: "bold", e.right1),
       ..if e.left2 != "" or e.right2 != "" {
-        (text(style: "italic", size: 9.5pt, e.left2), text(style: "italic", size: 9.5pt, e.right2))
+        (with-stack(e, "left2", text(style: "italic", size: 9.5pt, e.left2)), text(style: "italic", size: 9.5pt, e.right2))
       } else { () },
     )
     #if e.bullets.len() > 0 {

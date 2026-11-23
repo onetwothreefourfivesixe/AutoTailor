@@ -1,6 +1,6 @@
 """M8 plumbing: question parsing, the facts-and-style check, AnswerTools, the CLI and the UI page.
 
-The answer graph itself is the user's exercise (test_m8_answer_graph.py). Models are fakes.
+The answer graph has its own tests (test_m8_answer_graph.py). Models are fakes.
 """
 
 from __future__ import annotations
@@ -157,23 +157,19 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_cli_add_list_run_without_graph(home, monkeypatch):
-    def unwritten(*a, **k):
-        raise NotImplementedError
-
-    monkeypatch.setattr("autotailor.chains.answer_graph.build_answer_graph", unwritten)
+def test_cli_add_list_and_suggest(home):
     runner = CliRunner()
     qfile = home / "q.txt"
     qfile.write_text("Why Acme? (150 words)\n\nDescribe a project you're proud of.\n")
     r = runner.invoke(app, ["answers", "add", "lever:a", "--file", str(qfile)])
     assert r.exit_code == 0, r.output
     assert "[150 words]" in r.output
-    r = runner.invoke(app, ["answers", "run"])
+    r = runner.invoke(app, ["answers", "run", "--no-ask"])
     assert r.exit_code == 0, r.output
-    assert "suggesting points only" in r.output and "2 points suggested" in r.output
+    assert "2 points suggested; waiting for your decision" in r.output
     md = next((home / "data" / "outputs" / "answers").glob("*.md")).read_text()
     assert "## Why Acme? (150 words)" in md and "Built an OCR pipeline (`proj-ocr`)" in md
-    assert "points" in runner.invoke(app, ["answers", "list"]).output
+    assert "waiting" in runner.invoke(app, ["answers", "list"]).output
     assert runner.invoke(app, ["answers", "add", "nope:1", "Why?"]).exit_code == 1
 
 

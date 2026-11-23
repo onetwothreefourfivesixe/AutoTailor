@@ -13,16 +13,12 @@ from autotailor.ui.common import connection, fmt_time, load_settings_or_stop, pa
 
 @contextmanager
 def _graph(conn, settings):  # noqa: ANN001, ANN202
-    """The user's resolve graph over the shared checkpoint file, or None if not written yet."""
+    """The resolve graph over the shared checkpoint file."""
     from autotailor.chains.resolve_graph import build_resolve_graph
     from autotailor.sources import make_client
 
     with batch.open_checkpointer(paths().checkpoints) as saver, make_client() as client:
-        try:
-            graph = build_resolve_graph(resolve.Resolver(conn, client, settings), saver)
-        except NotImplementedError:
-            graph = None
-        yield graph
+        yield build_resolve_graph(resolve.Resolver(conn, client, settings), saver)
 
 
 def render() -> None:
@@ -41,12 +37,9 @@ def render() -> None:
         st.success(result.summary() if (result.messages or result.ignored) else f"No .eml files in `{paths().inbox}`.")
     if c2.button("Find open roles on job boards"):
         with connection() as conn, _graph(conn, settings) as graph, st.spinner("Checking employer job boards ..."):
-            if graph is None:
-                st.warning("The resolve graph isn't written yet (M7 exercise).")
-            else:
-                outs = [run_resolve(graph, pid) for pid in resolve.open_roles(conn)]
-                st.success(f"{sum(o.status == 'resolved' for o in outs)} found, "
-                           f"{sum(o.status == 'waiting' for o in outs)} need a link.")  # fmt: skip
+            outs = [run_resolve(graph, pid) for pid in resolve.open_roles(conn)]
+            st.success(f"{sum(o.status == 'resolved' for o in outs)} found, "
+                       f"{sum(o.status == 'waiting' for o in outs)} need a link.")  # fmt: skip
 
     with connection() as conn:
         rows = db.list_runway_roles(conn)
@@ -65,9 +58,6 @@ def render() -> None:
 
         st.subheader("Waiting for a link")
         with _graph(conn, settings) as graph:
-            if graph is None:
-                st.info("Answering needs the resolve graph (M7 exercise in src/autotailor/chains/resolve_graph.py).")
-                return
             waiting = []
             for pid in resolve.open_roles(conn):
                 snap = graph.get_state({"configurable": {"thread_id": _thread(pid)}})

@@ -47,9 +47,18 @@ def test_verbatim_and_light_rewording_pass():
     assert verify_resume(_verbatim("exp-lab-detector", "proj-ocr", skills=["PyTorch", "c++"]), CV, LIMITS) == []
     reworded = _r(
         ("exp-lab-detector", "Trained a YOLO object detection model in PyTorch on 12k labeled warehouse images (0.81 mAP)"),
-        ("exp-lab-cpp", "Cut on-device latency by 35% by porting detector preprocessing to C++"),
+        ("exp-lab-cpp", "Ported the detector's preprocessing to C++, reducing on-device latency by 35%"),
     )
     assert verify_resume(reworded, CV, LIMITS) == []
+
+
+def test_heavy_rewording_is_sent_back_with_the_cv_text():
+    restructured = _r(
+        ("exp-lab-cpp", "Cut on-device latency by 35% by porting detector preprocessing to C++"),
+        ("proj-budget", SRC["proj-budget"].text),
+    )
+    errors = verify_resume(restructured, CV, LIMITS)
+    assert any("reworded too much" in e and SRC["exp-lab-cpp"].text in e for e in errors), errors
 
 
 @pytest.mark.parametrize(
@@ -82,8 +91,8 @@ def test_users_real_cv_has_no_false_alarms():
     from autotailor.cv import load_master_cv
 
     cv = load_master_cv(path)
-    bullets = cv.bullets()
-    r = TailoredResume(bullets=[TailoredBullet(source_id=i, text=b.text) for i, b in bullets.items()])
+    hidden = cv.hidden_bullets()
+    r = TailoredResume(bullets=[TailoredBullet(source_id=i, text=b.text) for i, b in cv.bullets().items() if i not in hidden])
     assert verify_resume(r, cv, TailorSettings(min_bullets=1, max_bullets=999)) == []
 
 
@@ -197,7 +206,7 @@ def test_cli_tailor(home, monkeypatch):
     folders = [f for f in (home / "data" / "outputs").glob("*-run1/*") if f.is_dir()]
     assert [f.name for f in folders] == ["01-acme-swe-intern"]
     files = sorted(x.name for x in folders[0].iterdir())
-    assert files == ["posting.md", "sam-example-resume.docx", "sam-example-resume.pdf", "tailored.json"]
+    assert files == ["fit.json", "posting.md", "sam-example-resume.docx", "sam-example-resume.pdf", "tailored.json"]
     assert "Also posted as:\n- Denver" in (folders[0] / "posting.md").read_text()
 
     conn = db.connect(home / "data" / "autotailor.db")
@@ -210,12 +219,3 @@ def test_cli_tailor(home, monkeypatch):
     seen_profiles.clear()
     r = runner.invoke(app, ["tailor"])
     assert "Skipping 1 already tailored" in r.output and len(seen_profiles) == 1  # only the failed one again
-
-
-def test_cli_tailor_without_graph(home, monkeypatch):
-    def unwritten(*a, **k):
-        raise NotImplementedError
-
-    monkeypatch.setattr("autotailor.chains.tailor_graph.tailor_posting", unwritten)
-    r = CliRunner().invoke(app, ["tailor"])
-    assert r.exit_code == 1 and "M4 exercise" in r.output

@@ -1,8 +1,4 @@
-"""Tests for the M3 exercise in src/autotailor/chains/score_fit.py.
-
-As before: "xfail" until implemented, then normal tests ("xpass").
-Delete the `pytestmark` line once everything passes.
-"""
+"""Tests for the fit-scoring chain (chains/score_fit.py)."""
 
 import os
 import re
@@ -15,8 +11,6 @@ from langchain_core.runnables import RunnableLambda
 from autotailor.chains.score_fit import build_chain, build_prompt
 from autotailor.matching import compute_fit_score
 from autotailor.models import CriterionScore, FitAssessment
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M3 exercise not done yet")
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PROFILE = (FIXTURES / "profile_ml_student.txt").read_text()

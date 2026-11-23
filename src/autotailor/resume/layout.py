@@ -2,14 +2,24 @@
 
 Both renderers (PDF and Word) read this one structure, so they always agree on
 what appears and in which order:
+- Entries marked `hidden` never appear.
 - Contact and education always appear. Education shows its chosen detail
   bullets and GPA.
 - Experience, projects, activities, volunteer work and awards appear only for
-  entries with at least one chosen bullet. Entries keep the CV's order; bullets
-  within an entry keep the tailored order (most relevant first).
+  entries with at least one chosen bullet. With entry_order "relevance", the
+  entries in a section are ordered by their first chosen bullet (the tailored
+  list is most relevant first); with "cv", they keep the CV's order. Bullets
+  within an entry keep the tailored order.
+- An entry's `stack` follows its title, the items the posting values first
+  (those in the tailored skills or keywords).
 - Certifications always appear.
-- Skills: the tailored list, grouped under the CV's skill-group names. With no
-  tailored list, every CV skill.
+- Skills, under the CV's group names: with all_skills, every CV skill, the
+  tailored picks first within each group; otherwise only the tailored picks.
+  With no tailored list, every CV skill.
+
+Each section has `key` (experience, projects, ...) and each item, besides the four
+corner fields, has title, organization, location, dates, stack and stack_on (the
+corner field the title is in), so a template can lay out a section its own way.
 """
 
 from __future__ import annotations
@@ -34,15 +44,23 @@ def _dates(start: str | None, end: str | None) -> str:
     return start or end or ""
 
 
-def _item(e: Entry, bullets: list[str]) -> dict[str, Any]:
+def _stack(e: Entry, wanted: list[str]) -> str:
+    """The entry's stack, items the posting values first (otherwise in the CV's order)."""
+    rank = {w: i for i, w in enumerate(wanted)}
+    return ", ".join(sorted(e.stack, key=lambda s: rank.get(s.lower(), len(rank))))
+
+
+def _item(e: Entry, bullets: list[str], wanted: list[str] = ()) -> dict[str, Any]:
+    extra = {"title": e.title, "organization": e.organization or "", "location": e.location or "",
+             "dates": _dates(e.start, e.end), "stack": _stack(e, list(wanted))}  # fmt: skip
     if e.organization:
         return {"left1": e.organization, "right1": e.location or "", "left2": e.title,
-                "right2": _dates(e.start, e.end), "bullets": bullets}  # fmt: skip
+                "right2": _dates(e.start, e.end), "bullets": bullets, "stack_on": "left2", **extra}  # fmt: skip
     return {"left1": e.title, "right1": _dates(e.start, e.end), "left2": "", "right2": e.location or "",
-            "bullets": bullets}  # fmt: skip
+            "bullets": bullets, "stack_on": "left1", **extra}  # fmt: skip
 
 
-def build_layout(r: TailoredResume, cv: MasterCV) -> dict[str, Any]:
+def build_layout(r: TailoredResume, cv: MasterCV, entry_order: str = "cv", all_skills: bool = False) -> dict[str, Any]:
     chosen: dict[str, str] = {}
     for b in r.bullets:  # verified resumes only, so every ID exists
         chosen.setdefault(b.source_id.strip().strip("[]"), b.text.strip())
@@ -51,8 +69,12 @@ def build_layout(r: TailoredResume, cv: MasterCV) -> dict[str, Any]:
     c = cv.contact
     contact_line = " | ".join(x for x in [c.phone, c.email, c.location, *c.links] if x)
 
+    wanted = [s.lower() for s in r.skills]
+    hints = list(dict.fromkeys([*wanted, *(k.lower() for k in r.keywords)]))
     education = []
     for ed in cv.education:
+        if ed.hidden:
+            continue
         details = sorted((b.id for b in ed.details if b.id in chosen), key=order.get)
         lines = [chosen[i] for i in details]
         if ed.gpa:
@@ -61,34 +83,43 @@ def build_layout(r: TailoredResume, cv: MasterCV) -> dict[str, Any]:
             "left1": ed.school, "right1": ed.location or "",
             "left2": f"{ed.degree} {ed.field}" if ed.field else ed.degree,
             "right2": _dates(ed.start, ed.graduation) if ed.start else (ed.graduation or ""),
-            "bullets": lines,
+            "bullets": lines, "title": ed.degree, "organization": ed.school, "location": ed.location or "",
+            "dates": _dates(ed.start, ed.graduation) if ed.start else (ed.graduation or ""), "stack": "",
+            "stack_on": "left2",
         })  # fmt: skip
 
-    sections = [{"title": "Education", "items": education}]
+    sections = [{"key": "education", "title": "Education", "items": education}]
     for attr, title in SECTIONS:
-        items = []
+        ranked = []
         for e in getattr(cv, attr):
             ids = sorted((b.id for b in e.bullets if b.id in chosen), key=order.get)
-            if ids:
-                items.append(_item(e, [chosen[i] for i in ids]))
-        if items:
-            sections.append({"title": title, "items": items})
-    if cv.certifications:
+            if ids and not e.hidden:
+                ranked.append((order[ids[0]], _item(e, [chosen[i] for i in ids], hints)))
+        if entry_order == "relevance":
+            ranked.sort(key=lambda t: t[0])
+        if ranked:
+            sections.append({"key": attr, "title": title, "items": [item for _, item in ranked]})
+    certs = [e for e in cv.certifications if not e.hidden]
+    if certs:
         sections.append({
+            "key": "certifications",
             "title": "Certifications",
             "items": [
-                {"left1": e.title, "right1": _dates(e.start, e.end),
-                 "left2": e.organization or "", "right2": "", "bullets": [b.text for b in e.bullets]}
-                for e in cv.certifications
+                {**_item(e, [b.text for b in e.bullets], hints), "left1": e.title, "right1": _dates(e.start, e.end),
+                 "left2": e.organization or "", "right2": "", "stack_on": "left1"}
+                for e in certs
             ],
         })  # fmt: skip
 
-    wanted = [s.lower() for s in r.skills]
     skills = []
     for g in cv.skills:
-        items = g.items if not wanted else sorted(
-            (i for i in g.items if i.lower() in wanted), key=lambda i: wanted.index(i.lower())
-        )
+        picked = sorted((i for i in g.items if i.lower() in wanted), key=lambda i: wanted.index(i.lower()))
+        if not wanted:
+            items = g.items
+        elif all_skills:
+            items = [*picked, *(i for i in g.items if i not in picked)]
+        else:
+            items = picked
         if items:
             skills.append({"name": g.name, "items": ", ".join(items)})
 

@@ -1,10 +1,4 @@
-"""Tests for the M1 exercise in src/autotailor/chains/extract_posting.py.
-
-While build_prompt() and build_chain() raise NotImplementedError these show as
-"xfail" (expected failure). Once implemented they run as normal tests: a wrong
-implementation fails, a right one shows as "xpass". When everything passes,
-delete the `pytestmark` line below so they count as ordinary tests.
-"""
+"""Tests for the posting-extraction chain (chains/extract_posting.py)."""
 
 import os
 from pathlib import Path
@@ -14,8 +8,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 
 from autotailor.chains.extract_posting import PostingFields, build_chain, build_prompt
-
-# pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M1 exercise not done yet")
 
 SAMPLE = (Path(__file__).parent / "fixtures" / "sample_posting.txt").read_text()
 

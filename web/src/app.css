@@ -1,0 +1,127 @@
+@import 'tailwindcss';
+
+/* Dark mode follows data-theme on <html> (set before paint in app.html, toggled in the sidebar). */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* Design tokens. Neutral surfaces, one accent; color is reserved for meaning. */
+:root {
+	--bg: #f7f7f8;
+	--surface: #ffffff;
+	--sunken: #f0f1f3;
+	--line: #e2e4e8;
+	--fg: #1b1d22;
+	--muted: #5f6672;
+	--accent: #2f5bd3;
+	--accent-fg: #ffffff;
+	--good: #1f7a46;
+	--good-bg: #e3f4ea;
+	--warn: #8a5a00;
+	--warn-bg: #fdf1d6;
+	--off: #5b6472;
+	--off-bg: #eceef2;
+	--danger: #b42318;
+	--danger-bg: #fde7e4;
+	--cloud: #9a5b00;
+	--cloud-bg: #fff3dd;
+	--mark: #fff1a8;
+}
+
+[data-theme='dark'] {
+	--bg: #111317;
+	--surface: #181b21;
+	--sunken: #0d0f12;
+	--line: #2a2f38;
+	--fg: #e8eaee;
+	--muted: #9aa2b1;
+	--accent: #7fa2ff;
+	--accent-fg: #0d1222;
+	--good: #63d394;
+	--good-bg: #12301f;
+	--warn: #f1c35a;
+	--warn-bg: #352a10;
+	--off: #a3abb8;
+	--off-bg: #252a33;
+	--danger: #ff8a7a;
+	--danger-bg: #3a1714;
+	--cloud: #f3b75c;
+	--cloud-bg: #3a2a12;
+	--mark: #5a4d0c;
+}
+
+@theme inline {
+	--color-bg: var(--bg);
+	--color-surface: var(--surface);
+	--color-sunken: var(--sunken);
+	--color-line: var(--line);
+	--color-fg: var(--fg);
+	--color-muted: var(--muted);
+	--color-accent: var(--accent);
+	--color-accent-fg: var(--accent-fg);
+	--color-good: var(--good);
+	--color-good-bg: var(--good-bg);
+	--color-warn: var(--warn);
+	--color-warn-bg: var(--warn-bg);
+	--color-off: var(--off);
+	--color-off-bg: var(--off-bg);
+	--color-danger: var(--danger);
+	--color-danger-bg: var(--danger-bg);
+	--color-cloud: var(--cloud);
+	--color-cloud-bg: var(--cloud-bg);
+	--font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+}
+
+html,
+body {
+	background: var(--bg);
+	color: var(--fg);
+	font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	font-size: 14px;
+}
+
+mark {
+	background: var(--mark);
+	color: inherit;
+	border-radius: 2px;
+	padding: 0 1px;
+}
+
+ins {
+	text-decoration: underline;
+	text-decoration-color: var(--accent);
+	text-underline-offset: 3px;
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+@layer components {
+	.btn {
+		@apply inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50;
+	}
+	.btn-primary {
+		@apply border-accent bg-accent text-accent-fg hover:opacity-90 hover:bg-accent;
+	}
+	.btn-danger {
+		@apply border-danger text-danger hover:bg-danger-bg;
+	}
+	.btn-sm {
+		@apply px-2 py-1 text-xs;
+	}
+	.input {
+		@apply w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm placeholder:text-muted;
+	}
+	.card {
+		@apply rounded-lg border border-line bg-surface;
+	}
+	.label {
+		@apply mb-1 block text-xs font-medium text-muted;
+	}
+	.h1 {
+		@apply text-xl font-semibold;
+	}
+	.h2 {
+		@apply text-sm font-semibold uppercase tracking-wide text-muted;
+	}
+}

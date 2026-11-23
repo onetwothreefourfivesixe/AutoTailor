@@ -21,6 +21,7 @@ class Need:
     detail: str
     ref: str  # posting ID, question ID or run ID
     when: str | None = None
+    posting_id: str | None = None  # the job it belongs to, when there is one
 
 
 def collect(conn: sqlite3.Connection, settings: Settings, outputs: Path, checkpoints: Path | None = None) -> list[Need]:
@@ -42,11 +43,11 @@ def collect(conn: sqlite3.Connection, settings: Settings, outputs: Path, checkpo
         name = f"{p.company} | {p.title}" if p else q["posting_id"]
         if q["status"] == "waiting":
             needs.append(Need("answer_choice", q["text"][:90], f"{name}: points suggested; draft an answer or keep the points?",
-                              str(q["id"]), q["updated_at"]))  # fmt: skip
+                              str(q["id"]), q["updated_at"], q["posting_id"]))  # fmt: skip
         elif q["status"] == "needs_review":
             problems = json.loads(q["problems_json"] or "[]")
             needs.append(Need("answer_problems", q["text"][:90], f"{name}: {len(problems)} problem(s) left in the draft.",
-                              str(q["id"]), q["updated_at"]))  # fmt: skip
+                              str(q["id"]), q["updated_at"], q["posting_id"]))  # fmt: skip
 
     # Unclear verdicts near the top of the ranking.
     for p, m in matching.ranked(conn, settings)[:TOP_UNCLEAR]:

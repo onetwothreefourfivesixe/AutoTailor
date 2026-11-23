@@ -3,7 +3,9 @@
 Every bullet must name a real CV bullet as its source, and its rephrased text
 may not introduce numbers, or names/technical terms, that the source bullet
 (with its job or project title) and the CV's skills don't already contain.
-Lowercase wording changes are free: that is what tailoring is.
+Small wording changes are allowed (a posting's term for what the bullet already
+says), but a bullet rewritten in the model's own words is rejected and the
+CV's text is sent back to copy: the candidate's wording is the point.
 
 The messages are written for the model: on a retry they are sent back as
 feedback, so each one says what is wrong and how to fix it.
@@ -11,6 +13,7 @@ feedback, so each one says what is wrong and how to fix it.
 
 from __future__ import annotations
 
+import difflib
 import re
 
 from autotailor.config import TailorSettings
@@ -63,11 +66,19 @@ def _parents(cv: MasterCV) -> dict[str, str]:
     entries: list[Entry] = cv.entries()
     for e in entries:
         for b in e.bullets:
-            out[b.id] = f"{e.title} {e.organization or ''}"
+            out[b.id] = f"{e.title} {e.organization or ''} {' '.join(e.stack)}"
     for ed in cv.education:
         for b in ed.details:
             out[b.id] = f"{ed.school} {ed.degree} {ed.field or ''}"
     return out
+
+
+MIN_SIMILARITY = 0.75  # word level; the rewrites that read worse than the source scored 0.35-0.69
+
+
+def similarity(a: str, b: str) -> float:
+    """How much of the wording two bullets share, 0-1 (word level, ignoring case)."""
+    return difflib.SequenceMatcher(None, _words(a.lower()), _words(b.lower()), autojunk=False).ratio()
 
 
 def _norm_skill(s: str) -> str:
@@ -88,6 +99,7 @@ def verify_resume(r: TailoredResume, cv: MasterCV, limits: TailorSettings) -> li
     if n > limits.max_bullets:
         errors.append(f"{n} bullets. Use at most {limits.max_bullets} so the resume fits on one page.")
 
+    hidden = cv.hidden_bullets()
     seen: set[str] = set()
     for i, b in enumerate(r.bullets, 1):
         sid = b.source_id.strip().strip("[]")
@@ -100,8 +112,16 @@ def verify_resume(r: TailoredResume, cv: MasterCV, limits: TailorSettings) -> li
         if sid in seen:
             errors.append(f"Bullet {i}: '{sid}' is used more than once. Use each CV bullet at most once.")
         seen.add(sid)
+        if sid in hidden:
+            errors.append(f"Bullet {i}: '{sid}' belongs to an entry hidden from resumes. Choose another bullet.")
+            continue
 
         source = bullets[sid].text
+        if similarity(b.text, source) < MIN_SIMILARITY:
+            errors.append(
+                f"Bullet {i} ({sid}): reworded too much. Copy it as written, changing at most a few "
+                f"words to the posting's terms: \"{source}\""
+            )
         new_numbers = _numbers(b.text) - _numbers(source)
         if new_numbers:
             errors.append(

@@ -1,8 +1,4 @@
-"""Tests for the M4 exercise in src/autotailor/chains/tailor_graph.py.
-
-As before: "xfail" until implemented, then normal tests ("xpass").
-Delete the `pytestmark` line once everything passes.
-"""
+"""Tests for the tailoring graph (chains/tailor_graph.py): draft, verify, retry, history."""
 
 import os
 from pathlib import Path
@@ -15,8 +11,6 @@ from autotailor.chains.tailor_graph import build_graph
 from autotailor.config import TailorSettings
 from autotailor.cv import MasterCV
 from autotailor.models import TailoredBullet, TailoredResume
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="M4 exercise not done yet")
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CV = MasterCV.model_validate(yaml.safe_load((FIXTURES / "cv_ml_student.yaml").read_text()))
@@ -84,7 +78,7 @@ def test_gives_up_after_max_attempts():
     model = ScriptedModel(BAD)
     final = _run(model)
     assert final["attempts"] == LIMITS.max_attempts == len(model.prompts)
-    assert final["errors"] and final["resume"] == BAD
+    assert final["errors"] and [b.text for b in final["resume"].bullets] == [b.text for b in BAD.bullets]
 
 
 @live
@@ -106,7 +100,6 @@ def test_live_tailors_sample_posting():
     assert "proj-budget" not in ids, "the budgeting app is irrelevant to a perception internship"
 
 
-@pytest.mark.xfail(reason="M10 exercise: keep a history of every draft (see the end of tailor_graph.py)", strict=False)
 def test_history_keeps_every_draft():
     bad = TailoredResume(bullets=[TailoredBullet(source_id="ghost", text="Invented")], skills=[])
     model = ScriptedModel(bad, GOOD)
@@ -115,3 +108,42 @@ def test_history_keeps_every_draft():
     assert [h["attempt"] for h in history] == [1, 2]
     assert history[0]["bullets"] == ["ghost"] and history[0]["errors"]
     assert history[1]["errors"] == [] and history[1]["bullets"] == [b.source_id for b in GOOD.bullets]
+
+
+def test_clean_draft_fixes_small_mistakes_without_a_retry():
+    from autotailor.chains.tailor_graph import clean_draft
+    from autotailor.models import TailoredBullet
+
+    src = CV.bullets()
+    draft = TailoredResume(
+        bullets=[TailoredBullet(source_id="exp-ocr", text="(usual) " + src["proj-ocr"].text),  # wrong prefix
+                 TailoredBullet(source_id="exp-lab-detector", text=src["exp-lab-detector"].text)],
+        skills=["pytorch", "Data-Driven Synergy", "PyTorch", "C++"],
+    )  # fmt: skip
+    out = clean_draft(draft, CV, "light")
+    assert [b.source_id for b in out.bullets] == ["proj-ocr", "exp-lab-detector"]
+    assert out.bullets[0].text == src["proj-ocr"].text
+    assert out.skills == ["PyTorch", "C++"]
+    reworded = TailoredResume(bullets=[TailoredBullet(source_id="proj-ocr", text="Built an OCR thing")])
+    assert clean_draft(reworded, CV, "off").bullets[0].text == src["proj-ocr"].text
+
+
+def test_falls_back_to_the_usual_resume_when_no_draft_passes(monkeypatch):
+    from autotailor.chains import tailor_graph
+    from autotailor.config import Settings
+
+    data = yaml.safe_load((FIXTURES / "cv_ml_student.yaml").read_text())
+    for b in data["experience"][0]["bullets"][:2]:
+        b["base"] = True
+    cv = MasterCV.model_validate(data)
+    settings = Settings()
+    settings.tailor = TailorSettings(min_bullets=1, max_bullets=4, max_attempts=2)
+    monkeypatch.setattr(tailor_graph, "get_chat_model", lambda s, step: ScriptedModel(BAD))
+    r = tailor_graph.tailor_posting("A posting", PROFILE, cv, settings)
+    assert r.errors == [] and r.note == tailor_graph.FALLBACK_NOTE
+    assert [b.source_id for b in r.resume.bullets] == cv.base_bullets()
+    assert r.history[-1]["note"] and r.attempts == 2
+
+    monkeypatch.setattr(tailor_graph, "get_chat_model", lambda s, step: ScriptedModel(BAD))
+    plain = tailor_graph.tailor_posting("A posting", PROFILE, CV, settings)  # no usual resume marked
+    assert plain.errors and plain.note is None

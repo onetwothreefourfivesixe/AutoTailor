@@ -302,13 +302,6 @@ def add(
                 posting = from_url(client, url, extract)
         else:
             posting = from_text(text or "", extract)
-    except NotImplementedError:
-        _fail(
-            "The extraction chain is not written yet: it is the M1 exercise in "
-            "src/autotailor/chains/extract_posting.py.\n"
-            "Job board URLs (Greenhouse, Lever, Ashby) work without it."
-        )
-        return
     except NoFetchError as e:
         _fail(str(e))
         return
@@ -453,15 +446,6 @@ def screen(
                 max_concurrency=1 if spec.is_local else 4,
                 ids=[p.id for p in to_read],
             )
-        except NotImplementedError:
-            skipped = 0  # nothing can be read until the chain exists
-            typer.secho(
-                "The requirements chain is not written yet (M2 exercise in "
-                "src/autotailor/chains/extract_requirements.py). Using titles only for now.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-            results = []
         except Exception as e:  # e.g. missing API key, Ollama down, unknown model name
             skipped = 0
             typer.secho(
@@ -578,14 +562,6 @@ def rank(
                 max_concurrency=1 if score_spec.is_local else 4,
                 ids=[p.id for p in to_score],
             )
-        except NotImplementedError:
-            typer.secho(
-                "The fit-scoring chain is not written yet (M3 exercise in "
-                "src/autotailor/chains/score_fit.py). Ranking by embedding similarity only.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-            results = []
         except Exception as e:  # e.g. missing API key, Ollama down, unknown model name
             typer.secho(
                 f"Could not run the fit-scoring model ({describe(score_spec)}): {e}\n"
@@ -829,12 +805,7 @@ def runway_resolve(
     counts = {"resolved": 0, "skipped": 0, "waiting": 0}
     with batch.open_checkpointer(paths.checkpoints) as saver, make_client() as client:
         resolver = resolve.Resolver(conn, client, settings)
-        try:
-            graph = build_resolve_graph(resolver, saver)
-        except NotImplementedError:
-            graph = None
-            typer.secho("The resolve graph is not written yet (M7 exercise in src/autotailor/chains/resolve_graph.py): "
-                        "matching automatically only, no questions.", fg=typer.colors.YELLOW, err=True)  # fmt: skip
+        graph = build_resolve_graph(resolver, saver)
         typer.echo(f"Resolving {len(pending)} Runway roles ...", err=True)
         from autotailor.tasks import report_progress
 
@@ -845,8 +816,8 @@ def runway_resolve(
             current_item.set(pid)
             p = db.get_posting(conn, pid)
             label = f"{p.company} | {p.title}" if p else pid
-            if graph is None or p is None or p.description:
-                # No graph yet, or already filled in (e.g. a later board fetch merged into it).
+            if p is None or p.description:
+                # Already filled in (e.g. a later board fetch merged into it).
                 ok = resolver.auto_match(pid)
                 counts["resolved" if ok else "waiting"] += 1
                 continue
@@ -963,15 +934,10 @@ def answers_run(
     model = f"{spec.provider}:{spec.model}"
     touched: set[str] = set()
     with batch.open_checkpointer(paths.checkpoints) as saver:
-        try:
-            from autotailor.llm import get_chat_model
+        from autotailor.llm import get_chat_model
 
-            graph = build_answer_graph(tools, get_chat_model(settings, "tailor"), get_chat_model(settings, "humanize"),
-                                       saver, settings.tailor.max_attempts)  # fmt: skip
-        except NotImplementedError:
-            graph = None
-            typer.secho("The answer graph is not written yet (M8 exercise in src/autotailor/chains/answer_graph.py): "
-                        "suggesting points only, no drafts.", fg=typer.colors.YELLOW, err=True)  # fmt: skip
+        graph = build_answer_graph(tools, get_chat_model(settings, "tailor"), get_chat_model(settings, "humanize"),
+                                   saver, settings.tailor.max_attempts)  # fmt: skip
         for q in rows:
             qid = q["id"]
             touched.add(q["posting_id"])
@@ -981,11 +947,6 @@ def answers_run(
             if redo:
                 saver.delete_thread(thread_id(qid))
             try:
-                if graph is None:
-                    points = tools.suggest(qid)
-                    db.update_question(conn, qid, status="points", points=points)
-                    typer.echo(f"{qid}: {len(points)} points suggested.")
-                    continue
                 out = run_answer(graph, qid)
                 if out.status == "waiting" and no_ask:
                     save_outcome(conn, qid, out, model)
@@ -1292,36 +1253,11 @@ def _execute_run(conn, settings: Settings, cv, run_id: int, jobs: list | None) -
                 tasks_mod.report_progress(finished[0], total, f"{finished[0]} resume(s) done")
                 return result
 
+        graph = build_batch_graph(work, saver)
         try:
-            graph = build_batch_graph(work, saver)
-        except NotImplementedError:
-            graph = None
-            if jobs is None:
-                db.finish_run(conn, run_id, "failed", {})
-                _fail("Resuming needs the batch graph: the M5 exercise in src/autotailor/chains/batch_graph.py.")
-            typer.secho(
-                "The batch graph is not written yet (M5 exercise in src/autotailor/chains/batch_graph.py): "
-                "tailoring one at a time, and Ctrl-C loses this run's progress.",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-        try:
-            if graph is None:
-                results = [work(j) for j in jobs]
-            else:
-                with batch.interrupt_guard(cancel, parallel):
-                    results = run_batch(graph, jobs, batch.thread_id(run_id), parallel)
-        except NotImplementedError as e:
-            db.finish_run(conn, run_id, "failed", {})
-            if "M5" in str(e):
-                _fail(f"Not written yet: {e} (src/autotailor/chains/batch_graph.py).")
-            _fail("The tailoring graph is not written yet: it is the M4 exercise in src/autotailor/chains/tailor_graph.py.")
-            return
+            with batch.interrupt_guard(cancel, parallel):
+                results = run_batch(graph, jobs, batch.thread_id(run_id), parallel)
         except (KeyboardInterrupt, batch.Cancelled):
-            if graph is None:
-                db.finish_run(conn, run_id, "failed", {})
-                typer.secho(f"\nRun {run_id} stopped; nothing was saved.", fg=typer.colors.YELLOW, err=True)
-                raise typer.Exit(130) from None
             db.set_run_status(conn, run_id, "interrupted")
             typer.secho(
                 f"\nRun {run_id} stopped. Finished resumes are saved; `autotailor resume` continues it.",
@@ -1553,29 +1489,128 @@ def worker(once: bool = typer.Option(False, "--once", help="Run what's queued, t
         tasks.pid_file(paths.data).unlink(missing_ok=True)
 
 
-@app.command()
-def ui(port: int = typer.Option(8501, "--port", "-p", help="Port on 127.0.0.1.")) -> None:
-    """Open the local web UI: settings, master CV editor, run history.
+def _web_dir() -> Path:
+    """The SvelteKit app (web/ at the repo root)."""
+    return Path(__file__).resolve().parents[2] / "web"
 
-    It listens on 127.0.0.1 only, so other machines can't reach it, and
-    Streamlit's usage statistics are switched off.
+
+def _login_link(paths, port: int, minutes: int = 10) -> str:  # noqa: ANN001
+    """Write a one-time sign-in code for the web app (data/ui_login.json) and return its link."""
+    import json as _json
+    import secrets
+    import time
+
+    code = secrets.token_urlsafe(24)
+    f = paths.data / "ui_login.json"
+    f.write_text(_json.dumps({"code": code, "expires": time.time() + minutes * 60}))
+    f.chmod(0o600)
+    return f"http://127.0.0.1:{port}/login?code={code}"
+
+
+def _wait_for(url: str, seconds: float = 30) -> bool:
+    import time
+
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            httpx.get(url, timeout=1)
+            return True
+        except httpx.HTTPError:
+            time.sleep(0.3)
+    return False
+
+
+@app.command()
+def ui(
+    port: int = typer.Option(8501, "--port", "-p", help="Port for the web app on 127.0.0.1."),
+    api_port: int = typer.Option(8765, "--api-port", help="Port for the local API on 127.0.0.1."),
+    classic: bool = typer.Option(False, "--classic", help="The previous Streamlit UI instead."),
+    browser: bool = typer.Option(True, "--browser/--no-browser", help="Open the sign-in link in a browser."),
+) -> None:
+    """Open the local web app (and the API it uses). Ctrl-C stops both.
+
+    Both listen on 127.0.0.1 only. The app signs you in with a one-time link
+    printed here; the API token never reaches the browser.
     """
+    import shutil
     import subprocess
 
-    app_path = resources.files("autotailor.ui") / "app.py"
-    url = f"http://127.0.0.1:{port}"
-    typer.echo(f"AutoTailor UI: {url}  (Ctrl-C to stop)")
-    cmd = [
-        sys.executable, "-m", "streamlit", "run", str(app_path),
-        "--server.address", "127.0.0.1", "--server.port", str(port), "--server.headless", "true",
-        "--browser.gatherUsageStats", "false", "--browser.serverAddress", "127.0.0.1",
-        "--client.toolbarMode", "minimal", "--global.showWarningOnDirectExecution", "false",
-    ]  # fmt: skip
-    env = {**os.environ, "AUTOTAILOR_HOME": str(get_paths().home)}
+    paths = get_paths()
+    if not paths.config.exists():  # first run: set up the files the app needs
+        init()
+    env = {**os.environ, "AUTOTAILOR_HOME": str(paths.home)}
+    if classic:
+        app_path = resources.files("autotailor.ui") / "app.py"
+        typer.echo(f"AutoTailor (classic): http://127.0.0.1:{port}  (Ctrl-C to stop)")
+        cmd = [
+            sys.executable, "-m", "streamlit", "run", str(app_path),
+            "--server.address", "127.0.0.1", "--server.port", str(port), "--server.headless", "true",
+            "--browser.gatherUsageStats", "false", "--browser.serverAddress", "127.0.0.1",
+            "--client.toolbarMode", "minimal", "--global.showWarningOnDirectExecution", "false",
+        ]  # fmt: skip
+        try:
+            raise typer.Exit(subprocess.call(cmd, env=env))
+        except KeyboardInterrupt:
+            raise typer.Exit(0) from None
+
+    node = shutil.which("node")
+    build = _web_dir() / "build" / "index.js"
+    if node is None:
+        _fail("The web app needs Node.js 20.19 or later (https://nodejs.org). Or use `autotailor ui --classic`.")
+    if not build.exists():
+        _fail(f"The web app isn't built yet. Run:\n  cd {_web_dir()} && npm install && npm run build\n"
+              "Or use `autotailor ui --classic`.")  # fmt: skip
+    from autotailor.api import api_token
+
+    paths.data.mkdir(parents=True, exist_ok=True)
+    api_token(paths)
+    api_url = f"http://127.0.0.1:{api_port}"
+    procs = [
+        subprocess.Popen([sys.executable, "-m", "autotailor.cli", "api", "--port", str(api_port)], env=env),
+        subprocess.Popen(
+            [node, str(build)],
+            env={**env, "HOST": "127.0.0.1", "PORT": str(port), "ORIGIN": f"http://127.0.0.1:{port}",
+                 "AUTOTAILOR_API_URL": api_url, "BODY_SIZE_LIMIT": "50M"},  # fmt: skip
+        ),
+    ]
     try:
-        raise typer.Exit(subprocess.call(cmd, env=env))
+        if not (_wait_for(f"{api_url}/api/health") and _wait_for(f"http://127.0.0.1:{port}/login")):
+            typer.secho("The servers didn't start; see the messages above.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        link = _login_link(paths, port)
+        typer.echo("")
+        typer.secho("AutoTailor is running.", bold=True)
+        typer.echo(f"Open this one-time sign-in link (valid 10 minutes):\n  {link}")
+        typer.echo("Ctrl-C stops it.")
+        if browser:
+            import webbrowser
+
+            try:
+                webbrowser.open(link)
+            except Exception:  # no browser available (e.g. a bare WSL shell)
+                pass
+        while all(p.poll() is None for p in procs):
+            import time
+
+            time.sleep(0.5)
+        raise typer.Exit(1)
     except KeyboardInterrupt:
         raise typer.Exit(0) from None
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+        for p in procs:
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+
+@app.command("ui-login")
+def ui_login(port: int = typer.Option(8501, "--port", "-p", help="The web app's port.")) -> None:
+    """Print a new one-time sign-in link for the running web app (e.g. for another browser)."""
+    typer.echo(_login_link(get_paths(), port))
 
 
 if __name__ == "__main__":

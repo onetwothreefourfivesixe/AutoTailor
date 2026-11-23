@@ -161,7 +161,7 @@ def compare_tailor(conn: sqlite3.Connection, cv: MasterCV, settings: Settings, s
     from autotailor import batch, matching
     from autotailor.chains.tailor_graph import tailor_posting
 
-    base_profile = matching.profile_text(cv, settings.profile)
+    base_profile = matching.profile_text(cv, settings.profile, for_resume=True)
     trials = []
     for spec in specs:
         s = with_model(settings, "tailor", spec)

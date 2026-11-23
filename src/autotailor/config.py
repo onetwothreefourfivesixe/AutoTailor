@@ -100,7 +100,19 @@ class RunSettings(_Model):
 
 class TailorSettings(_Model):
     min_bullets: int = Field(default=6, ge=1, description="Fewest bullets on a tailored resume.")
-    max_bullets: int = Field(default=14, ge=1, description="Most bullets (keeps it to one page).")
+    max_bullets: int = Field(
+        default=14, ge=1, description="Most bullets the model picks; filling the page may add more."
+    )
+    fill_page: bool = Field(
+        default=True,
+        description="After tailoring, add the next most relevant CV bullets (verbatim, spread across "
+        "sections) until the page is full, or trim a resume that runs over one page.",
+    )
+    rewording: Literal["light", "off"] = Field(
+        default="light",
+        description="'light': bullets keep your wording, with the posting's exact term swapped in where a bullet "
+        "already says the same thing; 'off': bullets are copied word for word.",
+    )
     max_attempts: int = Field(default=3, ge=1, description="Drafts before giving up on a posting.")
     length_growth: float = Field(
         default=1.3, ge=1.0, description="A rephrased bullet may be at most this many times its source's length."
@@ -223,11 +235,20 @@ class ModelSettings(_Model):
 class ResumeSettings(_Model):
     template: str = Field(
         default="jake",
-        description="'jake' (Jake's Resume, LaTeX), 'typst' (the original AutoTailor look), or the file name "
+        description="'jake' (Jake's Resume, LaTeX), 'jake-compact' (denser: 10pt, tech stack after titles, one-line leadership), 'typst' (the original AutoTailor look), or the file name "
         "of your own .tex template in data/templates/.",
     )
     word_template: str = Field(
         default="", description="File name of your own .docx template in data/templates/; empty for the built-in Word layout."
+    )
+    entry_order: Literal["relevance", "cv"] = Field(
+        default="relevance",
+        description="Order jobs and projects within a section by relevance to the posting, or keep your CV's order.",
+    )
+    skills: Literal["all", "relevant"] = Field(
+        default="all",
+        description="'all': every CV skill, the posting's first in each group; 'relevant': only the skills the "
+        "tailoring model picked.",
     )
 
 

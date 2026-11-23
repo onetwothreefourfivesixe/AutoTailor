@@ -194,6 +194,12 @@ class TailoredResume(BaseModel):
         description="Skills from the CV's skills section most relevant to the posting, most "
         "relevant first. Only skills that appear in the CV.",
     )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="The posting's 10-20 most important keywords (hard skills, tools, methods, "
+        "qualifications), copied with the posting's exact wording, most important first. Used to "
+        "measure how well the resume covers the posting; list them whether or not the CV has them.",
+    )
 
 
 class AnswerPoint(BaseModel):
