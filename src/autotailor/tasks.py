@@ -233,11 +233,15 @@ def run_task(conn: sqlite3.Connection, task: sqlite3.Row, home: Path) -> str:
     """Run one task to completion as a subprocess. Returns its final status."""
     cmd = argv(task)
     args = cmd[3:] if cmd[1:3] == ["-m", "autotailor.cli"] else cmd
+    # UTF-8 both ways. Otherwise Windows decodes the output with the locale code page
+    # (cp1252), a character outside it kills the reader thread, and the task then blocks
+    # forever on a full output pipe.
     env = {**os.environ, "AUTOTAILOR_TASK_ID": str(task["id"]), "AUTOTAILOR_HOME": str(home),
-           "PYTHONUNBUFFERED": "1", "NO_COLOR": "1", "TERM": "dumb"}  # fmt: skip
+           "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1", "TERM": "dumb"}  # fmt: skip
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
         # Windows: its own process group, so Ctrl-Break can be sent to this task alone.
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if WINDOWS else 0,
     )  # fmt: skip
@@ -251,8 +255,17 @@ def run_task(conn: sqlite3.Connection, task: sqlite3.Row, home: Path) -> str:
     lock = threading.Lock()
 
     def reader() -> None:
+        # Must keep draining until the task exits: if it stops, the task blocks on a full pipe.
         assert proc.stdout is not None
-        for line in proc.stdout:
+        while True:
+            try:
+                line = proc.stdout.readline()
+            except (OSError, ValueError) as e:  # pipe broken: record it, the task can't be heard any more
+                with lock:
+                    lines.append(f"\n[output lost: {type(e).__name__}: {e}]\n")
+                return
+            if not line:
+                return
             with lock:
                 lines.append(line)
 
@@ -361,6 +374,17 @@ def ctrl_break_acts_like_ctrl_c() -> None:
             signal.signal(signal.SIGBREAK, signal.default_int_handler)
         except ValueError:  # not the main thread
             pass
+
+
+def ensure_worker_for_queue(conn: sqlite3.Connection, home: Path, data: Path) -> bool:
+    """Start the worker if tasks are waiting and none is running. True if it was started.
+
+    A worker normally starts when a task is queued. Tasks queued for a worker that
+    then died (or before the app restarted) would otherwise wait forever.
+    """
+    if conn.execute("SELECT 1 FROM tasks WHERE status = 'queued' LIMIT 1").fetchone() is None:
+        return False
+    return ensure_worker(home, data)
 
 
 def ensure_worker(home: Path, data: Path) -> bool:

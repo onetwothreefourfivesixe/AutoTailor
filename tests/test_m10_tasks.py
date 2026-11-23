@@ -85,6 +85,30 @@ def test_stop_sends_ctrl_c(home, monkeypatch):
     assert t["status"] == "cancelled" and "got Ctrl-C, saving" in output and "finished" not in output
 
 
+CHATTY = r"""
+import sys
+sys.stdout.buffer.write("start ← ✓ – café\n".encode("utf-8"))  # not all in the Windows code page
+sys.stdout.buffer.write(b"bad byte \x90 here\n")              # not even valid UTF-8
+sys.stdout.flush()
+for i in range(1500):  # far more than a pipe buffer holds, less than the kept log
+    print(f"line {i} " + "x" * 60, flush=True)
+print("all done", flush=True)
+"""
+
+
+def test_any_output_is_read_and_never_blocks_the_task(home, monkeypatch):
+    monkeypatch.setattr(tasks, "argv", lambda task: [sys.executable, "-c", CHATTY])
+    conn = db.connect(home / "data" / "autotailor.db")
+    tid = tasks.enqueue(conn, "tailor")
+    worker = threading.Thread(target=tasks.worker_loop, args=(home,), kwargs={"once": True})
+    worker.start()
+    worker.join(timeout=60)
+    assert not worker.is_alive(), "the task hung: its output wasn't being read"
+    t = tasks.get(conn, tid)
+    assert t["status"] == "done"
+    assert "start ← ✓ – café" in t["log"] and "bad byte" in t["log"] and "all done" in t["log"]
+
+
 def test_report_progress(home, monkeypatch):
     conn = db.connect(home / "data" / "autotailor.db")
     tid = tasks.enqueue(conn, "tailor")

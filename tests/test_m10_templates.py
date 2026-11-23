@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -107,8 +108,67 @@ def test_tectonic_download_installs_the_binary(tmp_path, monkeypatch):
         def iter_bytes(self):
             yield archive
 
+    import sys
+
+    urls = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
     monkeypatch.setattr("shutil.which", lambda name: None)
-    monkeypatch.setattr("httpx.stream", lambda *a, **k: Stream())
+    monkeypatch.setattr("httpx.stream", lambda method, url, **k: urls.append(url) or Stream())
     exe = latex.ensure_tectonic(tmp_path / "tools")
+    assert urls[0].endswith("tectonic-0.17.0-x86_64-unknown-linux-musl.tar.gz")
     assert exe == tmp_path / "tools" / "tectonic" and exe.read_bytes().startswith(b"#!/bin/sh")
-    assert exe.stat().st_mode & 0o111
+    if os.name != "nt":  # Windows has no executable bit
+        assert exe.stat().st_mode & 0o111
+
+
+def test_tectonic_download_on_windows_unzips_the_exe(tmp_path, monkeypatch):
+    import io
+    import sys
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("tectonic.exe", b"MZ fake windows binary")
+    archive = buf.getvalue()
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_bytes(self):
+            yield archive
+
+    urls = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("platform.machine", lambda: "AMD64")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("httpx.stream", lambda method, url, **k: urls.append(url) or Stream())
+    exe = latex.ensure_tectonic(tmp_path / "tools")
+    assert urls[0].endswith("tectonic-0.17.0-x86_64-pc-windows-msvc.zip")
+    assert exe == tmp_path / "tools" / "tectonic.exe" and exe.read_bytes() == b"MZ fake windows binary"
+
+
+@pytest.mark.parametrize(
+    ("plat", "machine", "target"),
+    [
+        ("win32", "AMD64", "x86_64-pc-windows-msvc.zip"),
+        ("linux", "x86_64", "x86_64-unknown-linux-musl.tar.gz"),
+        ("linux", "aarch64", "aarch64-unknown-linux-musl.tar.gz"),
+        ("darwin", "arm64", "aarch64-apple-darwin.tar.gz"),
+        ("darwin", "x86_64", "x86_64-apple-darwin.tar.gz"),
+    ],
+)
+def test_tectonic_url_matches_the_computer(plat, machine, target):
+    assert latex.tectonic_url(plat, machine).endswith(f"tectonic-0.17.0-{target}")
+
+
+def test_no_tectonic_build_says_how_to_install_it():
+    with pytest.raises(latex.LatexUnavailable, match="PATH"):
+        latex.tectonic_url("win32", "ARM64")

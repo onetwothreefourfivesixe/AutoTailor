@@ -1590,8 +1590,17 @@ def api(
 
     from autotailor.api import TOKEN_HEADER, api_token, create_app
 
+    from autotailor import tasks
+
     paths = get_paths()
     api_token(paths)  # created on first run
+    if paths.db.exists():  # tasks still waiting from before a restart get a worker
+        conn = db.connect(paths.db)
+        try:
+            if tasks.ensure_worker_for_queue(conn, paths.home, paths.data):
+                typer.echo("Started the background worker for tasks still waiting.")
+        finally:
+            conn.close()
     typer.echo(f"AutoTailor API: http://127.0.0.1:{port}  (docs: /docs)")
     typer.echo(f"Send the header {TOKEN_HEADER} with the token in {paths.data / 'api_token'}.")
     uvicorn.run(create_app(paths.home, cors or None), host="127.0.0.1", port=port, log_level="warning")

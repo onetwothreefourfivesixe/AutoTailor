@@ -173,6 +173,8 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
     def overview(request: Request, conn=Depends(_conn), settings: Settings = Depends(_settings)) -> dict:  # noqa: ANN001
         from autotailor import inbox, matching
 
+        # Tasks left waiting by a worker that died (or across a restart) get one again.
+        tasks.ensure_worker_for_queue(conn, _paths(request).home, _paths(request).data)
         matches = db.all_matches(conn)
         counts = db.table_counts(conn)
         cut = {i for i, m in matches.items() if matching.is_cut(m, settings.run)}

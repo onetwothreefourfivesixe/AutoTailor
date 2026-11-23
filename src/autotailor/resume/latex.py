@@ -28,11 +28,35 @@ from pathlib import Path
 from typing import Any
 
 TECTONIC_VERSION = "0.17.0"
-TECTONIC_URL = (
-    "https://github.com/tectonic-typesetting/tectonic/releases/download/"
-    f"tectonic%40{TECTONIC_VERSION}/tectonic-{TECTONIC_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+TECTONIC_RELEASE = (
+    f"https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{TECTONIC_VERSION}/"
 )
+# (sys.platform, machine) -> the release build for it. Names from the 0.17.0 release.
+TECTONIC_TARGETS = {
+    ("win32", "x86_64"): "x86_64-pc-windows-msvc.zip",
+    ("linux", "x86_64"): "x86_64-unknown-linux-musl.tar.gz",
+    ("linux", "aarch64"): "aarch64-unknown-linux-musl.tar.gz",
+    ("darwin", "x86_64"): "x86_64-apple-darwin.tar.gz",
+    ("darwin", "aarch64"): "aarch64-apple-darwin.tar.gz",
+}
+_MACHINES = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}
 COMPILE_TIMEOUT = 180
+
+
+def tectonic_url(platform: str | None = None, machine: str | None = None) -> str:
+    """The download for this computer. LatexUnavailable if Tectonic has no build for it."""
+    import platform as _platform
+    import sys
+
+    plat = platform or sys.platform
+    arch = _MACHINES.get((machine or _platform.machine()).lower(), (machine or "").lower())
+    target = TECTONIC_TARGETS.get(("linux" if plat.startswith("linux") else plat, arch))
+    if target is None:
+        raise LatexUnavailable(
+            f"No Tectonic download for {plat}/{arch}. Install Tectonic yourself (https://tectonic-typesetting.github.io) "
+            "and make sure `tectonic` is on your PATH."
+        )
+    return f"{TECTONIC_RELEASE}tectonic-{TECTONIC_VERSION}-{target}"
 
 
 class LatexUnavailable(RuntimeError):
@@ -96,11 +120,15 @@ def render_tex(template: str, layout: dict[str, Any]) -> str:
 
 
 def tectonic_path(tools: Path) -> Path:
-    return tools / "tectonic"
+    import sys
+
+    return tools / ("tectonic.exe" if sys.platform == "win32" else "tectonic")
 
 
 def ensure_tectonic(tools: Path) -> Path:
-    """The Tectonic binary, downloading it into `tools` on first use."""
+    """The Tectonic binary, downloading the build for this computer into `tools` on first use."""
+    import zipfile
+
     found = shutil.which("tectonic")
     if found:
         return Path(found)
@@ -109,24 +137,31 @@ def ensure_tectonic(tools: Path) -> Path:
         return exe
     import httpx
 
+    url = tectonic_url()
     tools.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=tools) as tmp:
-            archive = Path(tmp) / "tectonic.tar.gz"
-            with httpx.stream("GET", TECTONIC_URL, follow_redirects=True, timeout=120) as r:
+            archive = Path(tmp) / url.rsplit("/", 1)[1]
+            with httpx.stream("GET", url, follow_redirects=True, timeout=120) as r:
                 r.raise_for_status()
                 with archive.open("wb") as f:
                     for chunk in r.iter_bytes():
                         f.write(chunk)
-            with tarfile.open(archive) as tar:
-                member = next(m for m in tar.getmembers() if Path(m.name).name == "tectonic" and m.isfile())
-                member.name = "tectonic"  # a plain file at the top level, whatever the archive said
-                try:
-                    tar.extract(member, tmp, filter="data")
-                except TypeError:  # Python builds before extraction filters existed
-                    tar.extract(member, tmp)
-            shutil.move(str(Path(tmp) / "tectonic"), exe)
-    except (httpx.HTTPError, OSError, StopIteration, tarfile.TarError) as e:
+            out = Path(tmp) / exe.name
+            if archive.suffix == ".zip":  # Windows builds
+                with zipfile.ZipFile(archive) as z:
+                    name = next(n for n in z.namelist() if Path(n).name == exe.name)
+                    out.write_bytes(z.read(name))  # a plain file at the top level, whatever the archive said
+            else:
+                with tarfile.open(archive) as tar:
+                    member = next(m for m in tar.getmembers() if Path(m.name).name == exe.name and m.isfile())
+                    member.name = exe.name  # a plain file at the top level, whatever the archive said
+                    try:
+                        tar.extract(member, tmp, filter="data")
+                    except TypeError:  # Python builds before extraction filters existed
+                        tar.extract(member, tmp)
+            shutil.move(str(out), exe)
+    except (httpx.HTTPError, OSError, StopIteration, tarfile.TarError, zipfile.BadZipFile) as e:
         raise LatexUnavailable(f"Couldn't download Tectonic ({type(e).__name__}: {e}).") from e
     exe.chmod(0o755)
     return exe

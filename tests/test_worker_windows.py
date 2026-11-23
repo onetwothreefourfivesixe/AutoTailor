@@ -64,6 +64,20 @@ def test_windows_worker_is_detached_from_the_ui_console(tmp_path, monkeypatch):
     assert not seen["start_new_session"]
 
 
+def test_waiting_tasks_get_a_worker(tmp_path, monkeypatch):
+    from autotailor import db
+
+    started = []
+    monkeypatch.setattr(tasks, "ensure_worker", lambda home, data: started.append(home) or True)
+    conn = db.connect(tmp_path / "autotailor.db")
+    assert not tasks.ensure_worker_for_queue(conn, tmp_path, tmp_path)  # nothing waiting
+    tid = tasks.enqueue(conn, "screen")
+    assert tasks.ensure_worker_for_queue(conn, tmp_path, tmp_path)
+    tasks.cancel(conn, tid)
+    assert not tasks.ensure_worker_for_queue(conn, tmp_path, tmp_path)
+    assert started == [tmp_path]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Ctrl-Break is Windows-only")
 def test_ctrl_break_raises_keyboard_interrupt_like_ctrl_c():
     old = signal.getsignal(signal.SIGBREAK)

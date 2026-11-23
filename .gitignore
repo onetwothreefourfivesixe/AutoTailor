@@ -3,8 +3,8 @@
 !tests/fixtures/*.eml
 config.toml
 .env
-cv/
-data/
+/cv/
+/data/
 
 # Python
 .venv/
