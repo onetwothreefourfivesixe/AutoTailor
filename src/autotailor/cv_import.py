@@ -209,7 +209,9 @@ def parse_cv(text: str, settings: Settings, llm: Any = None) -> dict[str, Any]:
         from autotailor.llm import get_chat_model
 
         llm = get_chat_model(settings, "extract")
-    chain = load_prompt("import_cv", ImportedCV) | llm.with_structured_output(ImportedCV).with_retry(stop_after_attempt=2)
+    from autotailor.llm import structured
+
+    chain = load_prompt("import_cv", ImportedCV) | structured(llm, ImportedCV).with_retry(stop_after_attempt=2)
     imported: ImportedCV = chain.invoke({"document": text[:30000]})
     data = imported.model_dump(mode="json")
     for section in ("experience", "projects", "activities", "volunteer", "awards", "certifications"):

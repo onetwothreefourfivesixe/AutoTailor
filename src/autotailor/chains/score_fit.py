@@ -15,7 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from autotailor.chains.prompts import load_prompt
 from autotailor.config import Settings
-from autotailor.llm import get_chat_model
+from autotailor.llm import get_chat_model, structured
 from autotailor.models import FitAssessment
 
 if TYPE_CHECKING:  # names used only in type hints; not available at runtime
@@ -31,7 +31,7 @@ def build_prompt() -> ChatPromptTemplate:
 def build_chain(llm: BaseChatModel, profile: str) -> Runnable:
     """Prompt with the profile bound -> model with structured output, retried up to 3 times."""
     prompt = build_prompt().partial(profile=profile)
-    return prompt | llm.with_structured_output(FitAssessment).with_retry(stop_after_attempt=3)
+    return prompt | structured(llm, FitAssessment).with_retry(stop_after_attempt=3)
 
 
 def score_fit_batch(

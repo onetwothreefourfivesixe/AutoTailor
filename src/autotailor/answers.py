@@ -143,7 +143,9 @@ class AnswerTools:
             from autotailor.llm import get_chat_model
 
             llm = get_chat_model(self.settings, "score")
-        chain = load_prompt("suggest_points", AnswerPoints) | llm.with_structured_output(AnswerPoints).with_retry(
+        from autotailor.llm import structured
+
+        chain = load_prompt("suggest_points", AnswerPoints) | structured(llm, AnswerPoints).with_retry(
             stop_after_attempt=3
         )
         result: AnswerPoints = chain.invoke({

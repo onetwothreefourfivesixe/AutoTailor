@@ -15,7 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from autotailor.chains.prompts import load_prompt
 from autotailor.config import Settings
-from autotailor.llm import get_chat_model
+from autotailor.llm import get_chat_model, structured
 from autotailor.models import Requirements
 
 if TYPE_CHECKING:  # names used only in type hints; not available at runtime
@@ -30,7 +30,7 @@ def build_prompt() -> ChatPromptTemplate:
 
 def build_chain(llm: BaseChatModel) -> Runnable:
     """Prompt -> model with structured output; returns Requirements."""
-    return build_prompt() | llm.with_structured_output(Requirements)
+    return build_prompt() | structured(llm, Requirements)
 
 
 def _inputs(text: str, today: date | None) -> dict[str, str]:

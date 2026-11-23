@@ -156,7 +156,9 @@ def suggest_companies(text: str, settings: Settings, n: int = 60, llm: Any = Non
         from autotailor.llm import get_chat_model
 
         llm = get_chat_model(settings, "extract")
-    chain = load_prompt("suggest_companies", SuggestedCompanies) | llm.with_structured_output(SuggestedCompanies)
+    from autotailor.llm import structured
+
+    chain = load_prompt("suggest_companies", SuggestedCompanies) | structured(llm, SuggestedCompanies)
     out: SuggestedCompanies = chain.invoke({"interests": text.strip()[:500], "n": str(n)})
     names = [" ".join(c.name.split()) for c in out.companies if c.name.strip()]
     return list(dict.fromkeys(names))[: n * 2]
@@ -223,7 +225,9 @@ def pick_industries(text: str, settings: Settings, llm: Any = None) -> list[str]
         from autotailor.llm import get_chat_model
 
         llm = get_chat_model(settings, "extract")
-    chain = load_prompt("pick_industries", Picked) | llm.with_structured_output(Picked)
+    from autotailor.llm import structured
+
+    chain = load_prompt("pick_industries", Picked) | structured(llm, Picked)
     out = chain.invoke({"interests": text.strip()[:500], "industries": ", ".join(INDUSTRIES)})
     return list(dict.fromkeys(out.industries))
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from autotailor.chains.prompts import load_prompt
 from autotailor.config import Settings
-from autotailor.llm import get_chat_model
+from autotailor.llm import get_chat_model, structured
 
 if TYPE_CHECKING:  # names used only in type hints; not available at runtime
     from langchain_core.language_models import BaseChatModel
@@ -44,7 +44,7 @@ def build_prompt() -> ChatPromptTemplate:
 
 def build_chain(llm: BaseChatModel) -> Runnable:
     """Prompt -> model with structured output; invoke with {"text": ...} to get PostingFields."""
-    return build_prompt() | llm.with_structured_output(PostingFields)
+    return build_prompt() | structured(llm, PostingFields)
 
 
 def extract_posting_fields(text: str, settings: Settings) -> PostingFields:

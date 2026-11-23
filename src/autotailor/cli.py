@@ -1567,7 +1567,7 @@ def run_all(
     step("Screen")
     screen(posting_ids=None, rejudge=False, reextract=False, limit=50)
     step("Rank")
-    rank(rescore=False, show=None)
+    rank(posting_ids=None, rescore=False, show=None)
     step("Tailor")
     tailor(posting_ids=None, force=False, ignore_limits=True)
 

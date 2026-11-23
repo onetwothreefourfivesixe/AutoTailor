@@ -29,7 +29,7 @@ from langgraph.graph import END, START, StateGraph
 from autotailor.chains.prompts import load_prompt
 from autotailor.config import Settings, TailorSettings
 from autotailor.cv import MasterCV
-from autotailor.llm import get_chat_model
+from autotailor.llm import get_chat_model, structured
 from autotailor.matching import BASE_MARK
 from autotailor.models import TailoredBullet, TailoredResume
 from autotailor.resume.verify import verify_resume
@@ -103,7 +103,7 @@ def build_graph(llm: BaseChatModel, cv: MasterCV, limits: TailorSettings) -> Com
     prompt = load_prompt("tailor", TailoredResume).partial(
         min_bullets=str(limits.min_bullets), max_bullets=str(limits.max_bullets), wording=WORDING[limits.rewording]
     )
-    draft_chain = prompt | llm.with_structured_output(TailoredResume)
+    draft_chain = prompt | structured(llm, TailoredResume)
 
     def draft(state: TailorState) -> dict:
         errors = state.get("errors", [])

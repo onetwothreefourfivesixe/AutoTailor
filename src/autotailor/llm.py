@@ -94,6 +94,53 @@ def get_chat_model(settings: Settings, step: Step) -> BaseChatModel:
     )
 
 
+# Anthropic models that think by default: thinking is on whenever the request
+# doesn't turn it off, and on these generations it can't be turned off at all.
+# They also reject a forced tool call (`tool_choice` "any"/"tool"). Older Claude
+# models (Opus 4.6-4.8, Sonnet 4.6, Haiku 4.5, ...) think only when asked to.
+_THINKING_BY_DEFAULT_PREFIXES = (
+    "claude-fable-",
+    "claude-mythos-",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-5",
+)
+
+
+def _model_name(llm: Any) -> str:
+    return str(getattr(llm, "model", None) or getattr(llm, "model_name", None) or "")
+
+
+def supports_thinking(llm: Any) -> bool:
+    """Whether this chat model reasons (extended / adaptive thinking) before answering.
+
+    True when thinking is switched on explicitly in the model's config, or when
+    the model is an Anthropic generation that thinks by default. Only Anthropic
+    models are detected; other providers report False.
+    """
+    if type(llm).__name__ != "ChatAnthropic":
+        return False
+    thinking = getattr(llm, "thinking", None) or {}
+    if thinking.get("type") in ("enabled", "adaptive"):
+        return True
+    if thinking.get("type") in ("disabled", "between_tools"):
+        return False
+    return _model_name(llm).startswith(_THINKING_BY_DEFAULT_PREFIXES)
+
+
+def structured(llm: Any, schema: Any) -> Any:
+    """`llm.with_structured_output(schema)`, using a method the model supports.
+
+    LangChain's default for Claude is a forced tool call, which a thinking model
+    can't make (the API rejects it, or LangChain drops the force and the call
+    may never come). For those, use the API's native structured outputs
+    (`json_schema`). Every other model keeps its provider's default.
+    """
+    if supports_thinking(llm):
+        return llm.with_structured_output(schema, method="json_schema")
+    return llm.with_structured_output(schema)
+
+
 def describe(spec: ModelSpec | EmbeddingSpec) -> str:
     where = "local" if spec.is_local else "cloud: sends data off this machine"
     return f"{spec.provider}:{spec.model} ({where})"
