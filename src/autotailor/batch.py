@@ -198,7 +198,8 @@ def interrupt_guard(cancel: threading.Event, in_flight: int) -> Iterator[None]:
         )
         raise KeyboardInterrupt
 
-    signals = [signal.SIGINT, signal.SIGTERM] + ([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])
+    # SIGBREAK: Ctrl-Break, how the worker stops a task on Windows.
+    signals = [signal.SIGINT, signal.SIGTERM] + [getattr(signal, s) for s in ("SIGHUP", "SIGBREAK") if hasattr(signal, s)]
     old = {s: signal.signal(s, handler) for s in signals}
     try:
         yield

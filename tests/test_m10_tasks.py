@@ -20,6 +20,8 @@ import signal, sys, time
 def stop(*a):
     print("got Ctrl-C, saving", flush=True); sys.exit(130)
 signal.signal(signal.SIGINT, stop)
+if hasattr(signal, "SIGBREAK"):  # Windows: the worker stops tasks with Ctrl-Break (as autotailor's CLI does)
+    signal.signal(signal.SIGBREAK, stop)
 print("working", flush=True)
 for i in range(100):
     time.sleep(0.1)

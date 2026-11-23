@@ -12,6 +12,15 @@ checkpoints, Ctrl-C handling and `resume` behave the same. The worker:
 
 Commands report progress with `report_progress(done, total, message)`, which
 does nothing outside a task.
+
+Windows has no signals between processes, only console events, so three things
+differ there. Each task runs in its own process group and is stopped with
+Ctrl-Break, which AutoTailor's commands treat as Ctrl-C (see
+`ctrl_break_acts_like_ctrl_c`). The worker gets its own hidden console, so a
+Ctrl-C or a closed window in the terminal running the UI doesn't reach it (the
+equivalent of `start_new_session` elsewhere). And "is the worker alive?" asks
+Windows about the process: `os.kill(pid, 0)` there is not a check but sends
+Ctrl-C (signal 0 is CTRL_C_EVENT), which can reach every process in the console.
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from autotailor import db
 
 IDLE_EXIT = 30 * 60
 POLL = 1.0
+WINDOWS = sys.platform == "win32"
 LOG_LIMIT = 200_000  # characters of output kept per task
 
 # kind -> CLI arguments. Everything a task can run is listed here.
@@ -228,6 +238,8 @@ def run_task(conn: sqlite3.Connection, task: sqlite3.Row, home: Path) -> str:
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, text=True, bufsize=1,
+        # Windows: its own process group, so Ctrl-Break can be sent to this task alone.
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if WINDOWS else 0,
     )  # fmt: skip
     conn.execute("UPDATE tasks SET pid = ? WHERE id = ?", (proc.pid, task["id"]))
     conn.commit()
@@ -255,7 +267,9 @@ def run_task(conn: sqlite3.Connection, task: sqlite3.Row, home: Path) -> str:
             _append_log(conn, task["id"], chunk)
         row = get(conn, task["id"])
         if row and row["cancel"] and not interrupted:
-            proc.send_signal(signal.SIGINT)  # same as Ctrl-C: finished work is kept
+            # Same as Ctrl-C: finished work is kept. Windows can't send SIGINT; Ctrl-Break to the
+            # task's own process group does the same job there (see ctrl_break_acts_like_ctrl_c).
+            proc.send_signal(signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGINT)
             interrupted = True
             _append_log(conn, task["id"], "\n[Stop requested: finishing the jobs in progress ...]\n")
     t.join(timeout=5)
@@ -299,13 +313,54 @@ def pid_file(data: Path) -> Path:
     return data / "worker.pid"
 
 
+def process_alive(pid: int) -> bool:
+    """Whether a process with this ID is running. Never signals it."""
+    if not WINDOWS:
+        try:
+            os.kill(pid, 0)  # POSIX: signal 0 only checks
+            return True
+        except OSError:
+            return False
+    # Windows: os.kill(pid, 0) would send Ctrl-C (CTRL_C_EVENT == 0), so ask Windows instead.
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    process_query_limited_information, still_active = 0x1000, 259
+    handle = k32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        return bool(k32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == still_active
+    finally:
+        k32.CloseHandle(handle)
+
+
 def worker_running(data: Path) -> bool:
     try:
         pid = int(pid_file(data).read_text())
-        os.kill(pid, 0)
-        return True
     except (OSError, ValueError):
         return False
+    return process_alive(pid)
+
+
+def ctrl_break_acts_like_ctrl_c() -> None:
+    """Windows: make Ctrl-Break stop this process the way Ctrl-C does (KeyboardInterrupt).
+
+    The worker stops a task with Ctrl-Break (Windows can't send it Ctrl-C alone), and
+    Python's default for Ctrl-Break is to end the process at once, losing finished work.
+    Called when a CLI command starts; does nothing elsewhere or off the main thread.
+    """
+    if WINDOWS:
+        try:
+            signal.signal(signal.SIGBREAK, signal.default_int_handler)
+        except ValueError:  # not the main thread
+            pass
 
 
 def ensure_worker(home: Path, data: Path) -> bool:
@@ -317,7 +372,11 @@ def ensure_worker(home: Path, data: Path) -> bool:
     proc = subprocess.Popen(
         [sys.executable, "-m", "autotailor.cli", "worker"],
         stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        env={**os.environ, "AUTOTAILOR_HOME": str(home)}, start_new_session=True,
+        env={**os.environ, "AUTOTAILOR_HOME": str(home)},
+        # Detached from the UI's terminal, so Ctrl-C there or closing it doesn't stop a running
+        # task. POSIX: a new session. Windows: its own hidden console and process group.
+        start_new_session=not WINDOWS,
+        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if WINDOWS else 0,
     )  # fmt: skip
     pid_file(data).write_text(str(proc.pid))
     return True

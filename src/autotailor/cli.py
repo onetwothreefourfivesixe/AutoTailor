@@ -23,6 +23,14 @@ app = typer.Typer(no_args_is_help=True, help="Local-first job matching and resum
 config_app = typer.Typer(no_args_is_help=True, help="Show or change settings.")
 cv_app = typer.Typer(no_args_is_help=True, help="Work with the master CV.")
 jobs_app = typer.Typer(no_args_is_help=True, help="Browse stored job postings.")
+@app.callback()
+def _startup() -> None:
+    """Runs before every command."""
+    from autotailor import tasks
+
+    tasks.ctrl_break_acts_like_ctrl_c()  # Windows: how the worker stops a task
+
+
 app.add_typer(config_app, name="config")
 app.add_typer(cv_app, name="cv")
 app.add_typer(jobs_app, name="jobs")
@@ -1675,27 +1683,45 @@ def ui(
         _fail(f"The web app isn't built yet. Run:\n  cd {_web_dir()} && npm install && npm run build\n"
               "Or use `autotailor ui --classic`.")  # fmt: skip
     from autotailor.api import api_token
+    from autotailor.uilog import UiLog
 
     paths.data.mkdir(parents=True, exist_ok=True)
     api_token(paths)
     api_url = f"http://127.0.0.1:{api_port}"
-    procs = [
-        subprocess.Popen([sys.executable, "-m", "autotailor.cli", "api", "--port", str(api_port)], env=env),
-        subprocess.Popen(
+    # Everything the servers print also goes to data/ui.log, so a stop leaves a record
+    # even when the terminal that started them is gone.
+    log = UiLog(paths.data / "ui.log")
+    log.write("ui", f"starting (pid {os.getpid()}): web on port {port}, API on port {api_port}")
+    log.watch_console()
+    piped = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True,
+             "encoding": "utf-8", "errors": "replace", "bufsize": 1}  # fmt: skip
+    procs = {
+        "api": subprocess.Popen(
+            [sys.executable, "-m", "autotailor.cli", "api", "--port", str(api_port)],
+            # Unbuffered, or a piped Python child holds its output (and its last words) back.
+            env={**env, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}, **piped,
+        ),
+        "web": subprocess.Popen(
             [node, str(build)],
             env={**env, "HOST": "127.0.0.1", "PORT": str(port), "ORIGIN": f"http://127.0.0.1:{port}",
                  "AUTOTAILOR_API_URL": api_url, "BODY_SIZE_LIMIT": "50M"},  # fmt: skip
+            **piped,
         ),
-    ]
+    }
+    for name, p in procs.items():
+        log.follow(name, p)
     try:
         if not (_wait_for(f"{api_url}/api/health") and _wait_for(f"http://127.0.0.1:{port}/login")):
-            typer.secho("The servers didn't start; see the messages above.", fg=typer.colors.RED, err=True)
+            log.write("ui", "the servers didn't start")
+            typer.secho(f"The servers didn't start; see the messages above (also in {log.path}).",
+                        fg=typer.colors.RED, err=True)  # fmt: skip
             raise typer.Exit(1)
+        log.write("ui", "running")
         link = _login_link(paths, port)
         typer.echo("")
         typer.secho("AutoTailor is running.", bold=True)
         typer.echo(f"Open this one-time sign-in link (valid 10 minutes):\n  {link}")
-        typer.echo("Ctrl-C stops it.")
+        typer.echo(f"Ctrl-C stops it. Server messages are also saved to {log.path}")
         if browser:
             import webbrowser
 
@@ -1703,22 +1729,36 @@ def ui(
                 webbrowser.open(link)
             except Exception:  # no browser available (e.g. a bare WSL shell)
                 pass
-        while all(p.poll() is None for p in procs):
+        while all(p.poll() is None for p in procs.values()):
             import time
 
             time.sleep(0.5)
+        for name, p in procs.items():
+            if p.poll() is not None:
+                log.write("ui", f"{name} server exited with code {p.returncode}; stopping the other")
+                typer.secho(f"The {name} server stopped (exit code {p.returncode}); see {log.path}",
+                            fg=typer.colors.RED, err=True)  # fmt: skip
         raise typer.Exit(1)
     except KeyboardInterrupt:
+        log.write("ui", "Ctrl-C: stopping")
         raise typer.Exit(0) from None
+    except BaseException as e:
+        if not isinstance(e, typer.Exit):
+            log.write("ui", f"launcher error: {type(e).__name__}: {e}")
+        raise
     finally:
-        for p in procs:
+        for p in procs.values():
             if p.poll() is None:
                 p.terminate()
-        for p in procs:
+        for name, p in procs.items():
             try:
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 p.kill()
+                p.wait()
+            log.write("ui", f"{name} server stopped (exit code {p.returncode})")
+        log.write("ui", "stopped")
+        log.close()
 
 
 @app.command("ui-login")
