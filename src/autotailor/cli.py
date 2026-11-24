@@ -356,16 +356,17 @@ def fetch(
     from autotailor.sources.ats import fetch_board
 
     settings = _settings()
+    usajobs = settings.sources.usajobs and not board
     if board:
         boards = [_parse_board(b) for b in board]
     else:
-        if not settings.sources.ats_boards:
-            _fail("Job board fetching is off (sources.ats_boards = false).")
-        boards = _configured_boards(settings)
-        if not boards:
+        boards = _configured_boards(settings) if settings.sources.ats_boards else []
+        if not boards and not usajobs:
+            if not settings.sources.ats_boards:
+                _fail("Job board fetching is off (sources.ats_boards = false).")
             _fail(
                 "No boards configured. Add company slugs to config.toml, e.g.\n"
-                '  autotailor config set sources.greenhouse \'["figma"]\'\n'
+                "  autotailor config set sources.greenhouse '[\"figma\"]'\n"
                 "or pass one directly: autotailor fetch -b greenhouse:figma"
             )
 
@@ -393,11 +394,34 @@ def fetch(
                 continue
             report = ingest(conn, postings, include, exclude, days, settings.sources.keep_undated)
             typer.echo(f"{label}  {report.summary()}")
+        if usajobs:
+            from autotailor.sources import usajobs as usa
+
+            load_api_keys(get_paths().env)  # USAJOBS_API_KEY lives in .env
+            src = settings.sources
+            try:
+                postings = usa.search(client, src.usajobs_email, usa.api_key(), src.usajobs_keywords,
+                                      list(src.usajobs_hiring_paths), days)  # fmt: skip
+            except usa.USAJobsNotSetUp as e:
+                failures += 1
+                typer.secho(f"usajobs  not set up: {e}", fg=typer.colors.RED, err=True)
+            except httpx.HTTPStatusError as e:
+                failures += 1
+                code = e.response.status_code
+                why = "the API key was refused (check USAJOBS_API_KEY)" if code in (401, 403) else f"HTTP {code}"
+                typer.secho(f"usajobs  failed: {why}", fg=typer.colors.RED, err=True)
+            except httpx.HTTPError as e:
+                failures += 1
+                typer.secho(f"usajobs  failed: {e}", fg=typer.colors.RED, err=True)
+            else:
+                # USAJOBS's own filters chose these, so only title_exclude applies (as for Runway).
+                report = ingest(conn, postings, [], exclude, days, settings.sources.keep_undated)
+                typer.echo(f"usajobs  {report.summary()}")
     # This fetch's cutoff (--max-age) also decides what counts as too old now.
     sources = settings.sources.model_copy(update={"max_age_days": days})
     _prune(conn, settings.model_copy(update={"sources": sources}), compact=True)
     conn.close()
-    if failures == len(boards):
+    if failures and failures == len(boards) + int(usajobs):
         raise typer.Exit(1)
 
 
@@ -1606,7 +1630,7 @@ def run_all(
 
     if skip_fetch:
         pass
-    elif not settings.sources.ats_boards or not _configured_boards(settings):
+    elif not settings.sources.usajobs and (not settings.sources.ats_boards or not _configured_boards(settings)):
         typer.echo("No job boards configured; skipping fetch.", err=True)
     else:
         step("Fetch")

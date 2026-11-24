@@ -28,8 +28,14 @@ class DiscoverIn(BaseModel):
 
 
 class KeyIn(BaseModel):
-    provider: Literal["anthropic", "openai", "google_genai"]
+    provider: Literal["anthropic", "openai", "google_genai", "usajobs"]
     key: str
+
+
+def _key_env(provider: str) -> str:
+    from autotailor.sources.usajobs import KEY_ENV
+
+    return KEY_ENV if provider == "usajobs" else API_KEY_ENV[provider]
 
 
 def _template_text() -> str:
@@ -58,8 +64,11 @@ def keys_present(env_file: Path) -> dict[str, bool]:
     """Which providers have a key (in .env or the environment). Never returns the keys."""
     from dotenv import dotenv_values
 
+    from autotailor.sources.usajobs import KEY_ENV
+
     saved = dotenv_values(env_file) if env_file.exists() else {}
-    return {p: bool((saved.get(var) or os.environ.get(var) or "").strip()) for p, var in API_KEY_ENV.items()}
+    names = {**API_KEY_ENV, "usajobs": KEY_ENV}
+    return {p: bool((saved.get(var) or os.environ.get(var) or "").strip()) for p, var in names.items()}
 
 
 def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: ANN001
@@ -94,7 +103,7 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             "cv": cv_state == "ready",
             "profile": bool(settings.profile.education),
             "models": not missing_keys,
-            "sources": boards > 0,
+            "sources": boards > 0 or (settings.sources.usajobs and keys.get("usajobs", False)),
         }
         return {
             "checks": checks,
@@ -122,8 +131,8 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         if not key or any(c.isspace() for c in key) or len(key) > 500:
             raise HTTPException(422, "That doesn't look like an API key (it should be one line with no spaces).")
         p = _paths(request)
-        set_env_value(p.env, API_KEY_ENV[body.provider], key)
-        os.environ[API_KEY_ENV[body.provider]] = key  # usable now, without a restart
+        set_env_value(p.env, _key_env(body.provider), key)
+        os.environ[_key_env(body.provider)] = key  # usable now, without a restart
         return {"keys": keys_present(p.env)}
 
     @app.get("/api/setup/boards")
@@ -160,6 +169,9 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             "boards": [{"name": b.name, "ats": b.ats, "slug": b.slug, "jobs": b.jobs, "following": (b.ats, b.slug) in mine,
                         "from_model": b.name in d.from_model} for b in d.boards],
             "not_found": d.not_found, "model": f"{spec.provider}:{spec.model}", "local": spec.is_local,
+            # Law, policy and government work is mostly posted on USAJOBS and employers' own sites.
+            "suggest_usajobs": bool({"legal", "policy and government", "politics and advocacy"} & set(d.industries))
+            and not settings.sources.usajobs,
         }  # fmt: skip
 
     @app.post("/api/setup/cv")

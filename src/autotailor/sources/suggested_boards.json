@@ -65,11 +65,35 @@
   ]
  },
  {
+  "name": "Accela",
+  "ats": "greenhouse",
+  "slug": "accela",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
+  "name": "ACLU",
+  "ats": "greenhouse",
+  "slug": "aclu",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "Acorns",
   "ats": "ashby",
   "slug": "acorns",
   "industries": [
    "fintech"
+  ]
+ },
+ {
+  "name": "ActBlue",
+  "ats": "greenhouse",
+  "slug": "actblue",
+  "industries": [
+   "politics and advocacy"
   ]
  },
  {
@@ -288,6 +312,7 @@
   "slug": "andurilindustries",
   "industries": [
    "aerospace and defense",
+   "policy and government",
    "robotics and autonomy"
   ]
  },
@@ -501,6 +526,14 @@
   ]
  },
  {
+  "name": "Atticus",
+  "ats": "ashby",
+  "slug": "atticus",
+  "industries": [
+   "legal"
+  ]
+ },
+ {
   "name": "Attio",
   "ats": "ashby",
   "slug": "attio",
@@ -539,6 +572,32 @@
   "slug": "axelera",
   "industries": [
    "hardware"
+  ]
+ },
+ {
+  "name": "Axiom",
+  "ats": "greenhouse",
+  "slug": "axiom",
+  "industries": [
+   "legal"
+  ]
+ },
+ {
+  "name": "Axios",
+  "ats": "greenhouse",
+  "slug": "axios",
+  "industries": [
+   "games and media",
+   "policy and government",
+   "politics and advocacy"
+  ]
+ },
+ {
+  "name": "Axon",
+  "ats": "greenhouse",
+  "slug": "axon",
+  "industries": [
+   "policy and government"
   ]
  },
  {
@@ -687,6 +746,14 @@
   ]
  },
  {
+  "name": "Blue Rose Research",
+  "ats": "greenhouse",
+  "slug": "blueroseresearch",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "Bot Auto",
   "ats": "greenhouse",
   "slug": "botauto",
@@ -757,6 +824,14 @@
   "slug": "brisk-teaching",
   "industries": [
    "education"
+  ]
+ },
+ {
+  "name": "Brookings",
+  "ats": "lever",
+  "slug": "brookings",
+  "industries": [
+   "policy and government"
   ]
  },
  {
@@ -906,6 +981,14 @@
   ]
  },
  {
+  "name": "Catalist",
+  "ats": "lever",
+  "slug": "catalist",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "Causal",
   "ats": "ashby",
   "slug": "causal",
@@ -1028,6 +1111,30 @@
   ]
  },
  {
+  "name": "Citizen",
+  "ats": "ashby",
+  "slug": "citizen",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
+  "name": "CivicPlus",
+  "ats": "greenhouse",
+  "slug": "civicplus",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
+  "name": "Civis Analytics",
+  "ats": "greenhouse",
+  "slug": "civisanalytics",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "ClassDojo",
   "ats": "ashby",
   "slug": "classdojo",
@@ -1126,6 +1233,14 @@
   ]
  },
  {
+  "name": "Code for America",
+  "ats": "greenhouse",
+  "slug": "codeforamerica",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
   "name": "Cognition",
   "ats": "ashby",
   "slug": "cognition",
@@ -1179,6 +1294,14 @@
   "slug": "column",
   "industries": [
    "fintech"
+  ]
+ },
+ {
+  "name": "Common Cause",
+  "ats": "lever",
+  "slug": "commoncause",
+  "industries": [
+   "politics and advocacy"
   ]
  },
  {
@@ -1388,6 +1511,14 @@
   ]
  },
  {
+  "name": "Democracy Forward",
+  "ats": "greenhouse",
+  "slug": "democracyforward",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "Depot",
   "ats": "ashby",
   "slug": "depot",
@@ -1427,6 +1558,14 @@
   "slug": "diligentrobotics",
   "industries": [
    "robotics and autonomy"
+  ]
+ },
+ {
+  "name": "DISCO",
+  "ats": "greenhouse",
+  "slug": "disco",
+  "industries": [
+   "legal"
   ]
  },
  {
@@ -1720,6 +1859,22 @@
   "slug": "etched",
   "industries": [
    "hardware"
+  ]
+ },
+ {
+  "name": "Eudia",
+  "ats": "greenhouse",
+  "slug": "eudia",
+  "industries": [
+   "legal"
+  ]
+ },
+ {
+  "name": "Everlaw",
+  "ats": "greenhouse",
+  "slug": "everlaw",
+  "industries": [
+   "legal"
   ]
  },
  {
@@ -2191,7 +2346,8 @@
   "slug": "harvey",
   "industries": [
    "ai",
-   "business software"
+   "business software",
+   "legal"
   ]
  },
  {
@@ -2744,6 +2900,14 @@
   ]
  },
  {
+  "name": "Legora",
+  "ats": "ashby",
+  "slug": "legora",
+  "industries": [
+   "legal"
+  ]
+ },
+ {
   "name": "Life360",
   "ats": "greenhouse",
   "slug": "life360",
@@ -2947,6 +3111,14 @@
   "slug": "manifoldbio",
   "industries": [
    "biotech"
+  ]
+ },
+ {
+  "name": "Mark43",
+  "ats": "greenhouse",
+  "slug": "mark43",
+  "industries": [
+   "policy and government"
   ]
  },
  {
@@ -3233,6 +3405,14 @@
   ]
  },
  {
+  "name": "MyCase",
+  "ats": "greenhouse",
+  "slug": "mycase",
+  "industries": [
+   "legal"
+  ]
+ },
+ {
   "name": "Mysten Labs",
   "ats": "ashby",
   "slug": "mystenlabs",
@@ -3516,6 +3696,14 @@
   ]
  },
  {
+  "name": "OpenGov",
+  "ats": "ashby",
+  "slug": "opengov",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
   "name": "Optiver",
   "ats": "greenhouse",
   "slug": "optiverus",
@@ -3648,7 +3836,8 @@
   "ats": "lever",
   "slug": "palantir",
   "industries": [
-   "aerospace and defense"
+   "aerospace and defense",
+   "policy and government"
   ]
  },
  {
@@ -3746,6 +3935,14 @@
   "slug": "patreon",
   "industries": [
    "games and media"
+  ]
+ },
+ {
+  "name": "Paul, Weiss (business staff)",
+  "ats": "greenhouse",
+  "slug": "paulweiss",
+  "industries": [
+   "legal"
   ]
  },
  {
@@ -3991,7 +4188,8 @@
   "ats": "ashby",
   "slug": "primer",
   "industries": [
-   "aerospace and defense"
+   "aerospace and defense",
+   "policy and government"
   ]
  },
  {
@@ -4008,6 +4206,23 @@
   "slug": "project44",
   "industries": [
    "logistics"
+  ]
+ },
+ {
+  "name": "Propel",
+  "ats": "ashby",
+  "slug": "propel",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
+  "name": "ProPublica",
+  "ats": "greenhouse",
+  "slug": "propublica",
+  "industries": [
+   "games and media",
+   "policy and government"
   ]
  },
  {
@@ -4043,11 +4258,27 @@
   ]
  },
  {
+  "name": "Quorum",
+  "ats": "ashby",
+  "slug": "quorum",
+  "industries": [
+   "policy and government"
+  ]
+ },
+ {
   "name": "Qventus",
   "ats": "greenhouse",
   "slug": "qventus",
   "industries": [
    "digital health"
+  ]
+ },
+ {
+  "name": "Raft",
+  "ats": "greenhouse",
+  "slug": "raft",
+  "industries": [
+   "policy and government"
   ]
  },
  {
@@ -4089,6 +4320,14 @@
   "slug": "rebelliondefense",
   "industries": [
    "aerospace and defense"
+  ]
+ },
+ {
+  "name": "Recidiviz",
+  "ats": "greenhouse",
+  "slug": "recidiviz",
+  "industries": [
+   "policy and government"
   ]
  },
  {
@@ -4215,11 +4454,27 @@
   ]
  },
  {
+  "name": "RepresentUs",
+  "ats": "lever",
+  "slug": "representus",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "Resend",
   "ats": "ashby",
   "slug": "resend",
   "industries": [
    "developer tools"
+  ]
+ },
+ {
+  "name": "Results for America",
+  "ats": "greenhouse",
+  "slug": "resultsforamerica",
+  "industries": [
+   "policy and government"
   ]
  },
  {
@@ -4292,6 +4547,14 @@
   "slug": "rocketlab",
   "industries": [
    "aerospace and defense"
+  ]
+ },
+ {
+  "name": "Rocket Lawyer",
+  "ats": "greenhouse",
+  "slug": "rocketlawyer",
+  "industries": [
+   "legal"
   ]
  },
  {
@@ -4402,6 +4665,7 @@
   "industries": [
    "aerospace and defense",
    "ai",
+   "policy and government",
    "robotics and autonomy"
   ]
  },
@@ -4434,7 +4698,8 @@
   "ats": "ashby",
   "slug": "second-front-systems",
   "industries": [
-   "aerospace and defense"
+   "aerospace and defense",
+   "policy and government"
   ]
  },
  {
@@ -4451,6 +4716,16 @@
   "slug": "seesaw",
   "industries": [
    "education"
+  ]
+ },
+ {
+  "name": "Semafor",
+  "ats": "greenhouse",
+  "slug": "semafor",
+  "industries": [
+   "games and media",
+   "policy and government",
+   "politics and advocacy"
   ]
  },
  {
@@ -4499,6 +4774,7 @@
   "slug": "shield",
   "industries": [
    "aerospace and defense",
+   "policy and government",
    "robotics and autonomy"
   ]
  },
@@ -4517,6 +4793,14 @@
   "industries": [
    "ai",
    "business software"
+  ]
+ },
+ {
+  "name": "Sierra Club",
+  "ats": "lever",
+  "slug": "sierraclub",
+  "industries": [
+   "politics and advocacy"
   ]
  },
  {
@@ -4657,6 +4941,14 @@
   ]
  },
  {
+  "name": "Southern Poverty Law Center",
+  "ats": "greenhouse",
+  "slug": "southernpovertylawcenter",
+  "industries": [
+   "politics and advocacy"
+  ]
+ },
+ {
   "name": "SpaceX",
   "ats": "greenhouse",
   "slug": "spacex",
@@ -4702,6 +4994,14 @@
   "slug": "splice",
   "industries": [
    "games and media"
+  ]
+ },
+ {
+  "name": "SpotDraft",
+  "ats": "ashby",
+  "slug": "spotdraft",
+  "industries": [
+   "legal"
   ]
  },
  {
@@ -5031,6 +5331,25 @@
   ]
  },
  {
+  "name": "The Dispatch",
+  "ats": "ashby",
+  "slug": "dispatch",
+  "industries": [
+   "games and media",
+   "policy and government",
+   "politics and advocacy"
+  ]
+ },
+ {
+  "name": "The Marshall Project",
+  "ats": "greenhouse",
+  "slug": "themarshallproject",
+  "industries": [
+   "games and media",
+   "policy and government"
+  ]
+ },
+ {
   "name": "The Trade Desk",
   "ats": "greenhouse",
   "slug": "thetradedesk",
@@ -5330,6 +5649,14 @@
   ]
  },
  {
+  "name": "UniCourt",
+  "ats": "ashby",
+  "slug": "unicourt",
+  "industries": [
+   "legal"
+  ]
+ },
+ {
   "name": "Uniswap Labs",
   "ats": "ashby",
   "slug": "uniswap",
@@ -5406,7 +5733,8 @@
   "ats": "greenhouse",
   "slug": "vannevarlabs",
   "industries": [
-   "aerospace and defense"
+   "aerospace and defense",
+   "policy and government"
   ]
  },
  {
@@ -5551,7 +5879,9 @@
   "ats": "greenhouse",
   "slug": "voxmedia",
   "industries": [
-   "games and media"
+   "games and media",
+   "policy and government",
+   "politics and advocacy"
   ]
  },
  {

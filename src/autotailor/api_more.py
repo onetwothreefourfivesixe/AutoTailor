@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -83,12 +84,23 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         `needs` (count), `runs` (latest run), `postings` (count). Sent when they change."""
         paths = _paths(request)
         # One connection for the life of the stream (opening one costs ~10 ms); used by one
-        # worker thread at a time.
+        # worker thread at a time. The lock also keeps it from being closed mid-query: a browser
+        # that disconnects cancels the stream while a snapshot may still be running in its thread,
+        # and closing a SQLite connection under a running query crashes the process.
         conn = db.connect(paths.db, any_thread=True)
+        lock = threading.Lock()
         needs_at = -NEEDS_EVERY
         needs: int | None = None
 
         def snapshot(tasks_changed: bool) -> dict[str, Any]:
+            with lock:
+                return _snapshot(tasks_changed)
+
+        def close() -> None:
+            with lock:  # waits for a running snapshot
+                conn.close()
+
+        def _snapshot(tasks_changed: bool) -> dict[str, Any]:
             nonlocal needs_at, needs
             from autotailor import inbox
             from autotailor.config import load_settings
@@ -127,7 +139,8 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
                         yield ": keep-alive\n\n"
                     await asyncio.sleep(EVENT_POLL)
             finally:
-                conn.close()
+                # Not awaited (the stream may be cancelled): the thread closes once no snapshot runs.
+                threading.Thread(target=close, daemon=True).start()
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 

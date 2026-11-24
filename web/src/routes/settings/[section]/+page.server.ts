@@ -13,5 +13,6 @@ export const load: PageServerLoad = async ({ params }) => {
 	const models = params.section === 'models' ? await json<Models>('/api/models') : null;
 	const comparisons = params.section === 'models' ? await json<{ id: string; step: string }[]>('/api/comparisons') : [];
 	const templates = params.section === 'templates' ? await json<Templates>('/api/templates') : null;
-	return { section: params.section, settings, models, comparisons, templates };
+	const keys = params.section === 'sources' ? (await json<{ keys: Record<string, boolean> }>('/api/setup/status')).keys : {};
+	return { section: params.section, settings, models, comparisons, templates, keys };
 };

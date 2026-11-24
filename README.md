@@ -143,6 +143,18 @@ Saved postings older than the cutoff (by publish date, or by when they were firs
 
 Many large companies (Apple, Google, Microsoft, Amazon, ...) use their own careers sites, which AutoTailor can't read. Paste those postings instead.
 
+**Federal jobs (USAJOBS).** The U.S. government's official job site, read through its public API: federal internships (including Pathways), recent-graduate programs, and policy, legal, analyst and technical roles. Turn it on under Settings › Job sources: get a free API key at [developer.usajobs.gov](https://developer.usajobs.gov/apirequest/) (it arrives by email) and paste it there (it's saved to `.env`), and give a contact email, which USAJOBS asks every request to include (it goes only to USAJOBS). Choose who the postings are for (students, recent graduates, anyone) and optional search terms ("policy", "legal"). It's fetched with the job boards, and the same date cutoff applies. Or in `config.toml`:
+
+```toml
+[sources]
+usajobs = true
+usajobs_email = "you@example.com"
+usajobs_keywords = ["policy", "legal"]
+usajobs_hiring_paths = ["student", "graduates"]
+```
+
+**Law and politics.** The company search covers legal tech (Harvey, Legora, Everlaw, …), policy and government (Brookings, Code for America, Recidiviz, govtech), and politics and advocacy (ACLU, Southern Poverty Law Center, Democracy Forward, Common Cause, Civis Analytics, …). Most law firms, think tanks, campaigns and congressional offices don't use public job boards: use USAJOBS for federal roles and paste the rest with **Add**.
+
 **Finding companies by field.** `uv run autotailor discover "medical devices, neurotech"` lists companies in those fields with open jobs (`--add` follows them all, `--no-model` uses only the built-in catalog). Only your description is sent to the model, never your CV.
 
 **Pasted postings.** Use **Add** with a link or the posting's text. LinkedIn, Handshake, Indeed, Glassdoor and Runway don't allow automated access, so AutoTailor never opens their links: open the posting yourself and paste its text.

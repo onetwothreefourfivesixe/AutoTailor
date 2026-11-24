@@ -150,6 +150,22 @@ class SourceSettings(_Model):
     keep_undated: bool = Field(
         default=True, description="Keep postings that don't say when they were published (the cutoff can't apply)."
     )
+    usajobs: bool = Field(
+        default=False,
+        description="Also fetch federal jobs from USAJOBS (needs USAJOBS_API_KEY in .env and usajobs_email).",
+    )
+    usajobs_email: str = Field(
+        default="", description="Your contact email: USAJOBS asks every API request to include one. Sent only to USAJOBS."
+    )
+    usajobs_keywords: list[str] = Field(
+        default_factory=list,
+        description="Search terms, one search each (e.g. policy, legal, data); empty searches every posting.",
+    )
+    usajobs_hiring_paths: list[Literal["student", "graduates", "public"]] = Field(
+        default_factory=lambda: ["student", "graduates"],
+        description="Who the postings are for: student (internships, Pathways), graduates (recent graduates), "
+        "public (anyone). Empty: all.",
+    )
     delete_expired: bool = Field(
         default=True,
         description="Delete stored postings older than max_age_days (by publish date, or by when they were first "

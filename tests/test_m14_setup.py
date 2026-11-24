@@ -119,7 +119,7 @@ def test_status_on_a_fresh_install(client):
 
 def test_keys_are_saved_to_env_and_never_returned(client):
     r = client.put("/api/setup/keys", json={"provider": "google_genai", "key": "AIzaTESTKEY123"}).json()
-    assert r == {"keys": {"anthropic": False, "openai": False, "google_genai": True}}
+    assert {k: r["keys"][k] for k in ("anthropic", "openai", "google_genai")} == {"anthropic": False, "openai": False, "google_genai": True}
     env = (client.home / ".env").read_text()
     assert "GOOGLE_API_KEY=AIzaTESTKEY123" in env and env.count("GOOGLE_API_KEY") == 1  # replaced, not appended
     assert (client.home / ".env").stat().st_mode & 0o077 == 0

@@ -168,7 +168,7 @@
 	let fields = $state((data.settings.profile?.role_interests ?? []).join(', '));
 	let askModel = $state(false);
 	let searching = $state(false);
-	let found = $state<{ industries: string[]; boards: Found[]; not_found: string[]; model: string; local: boolean } | null>(null);
+	let found = $state<{ industries: string[]; boards: Found[]; not_found: string[]; model: string; local: boolean; suggest_usajobs?: boolean } | null>(null);
 	async function findCompanies() {
 		searching = true;
 		try {
@@ -427,6 +427,9 @@
 				{#if searching}<p class="text-xs text-muted">Checking each company's job board for open jobs. This takes up to a minute{askModel ? ', longer with the AI' : ''}.</p>{/if}
 				{#if found}
 					<p class="text-sm">Found <b>{found.boards.length}</b> companies with job boards in: {found.industries.join(', ') || 'no matching industry'}. They're selected; untick any you don't want.</p>
+					{#if found.suggest_usajobs}
+						<p class="rounded-md bg-sunken p-2 text-sm">Much law, policy and government work isn't on these job boards. Federal jobs, including internships, come from <b>USAJOBS</b>: turn it on later under <a class="text-accent hover:underline" href="/settings/sources" target="_blank" rel="noreferrer">Settings › Job sources</a> (it needs a free key). Law firm and Capitol Hill postings: paste them with Add.</p>
+					{/if}
 					{#if found.boards.length}
 						<div class="grid max-h-72 gap-1 overflow-y-auto rounded-lg border border-line p-2 sm:grid-cols-2">
 							{#each found.boards as b (b.ats + b.slug)}

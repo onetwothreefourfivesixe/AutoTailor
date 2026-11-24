@@ -49,8 +49,8 @@ def test_words_are_matched_to_industries():
     assert d.match_industries("biomedical") == ["biotech", "genomics", "diagnostics", "medical devices", "digital health"]
     assert d.match_industries("robots and space") == ["robotics and autonomy", "aerospace and defense"]
     assert "quant trading" in d.match_industries("Quant finance")
-    assert d.match_industries("journalism") == []
-    picked = d.pick_industries("journalism", Settings(), llm=FakeModel({"industries": ["games and media"]}))
+    assert d.match_industries("pottery") == []
+    picked = d.pick_industries("pottery", Settings(), llm=FakeModel({"industries": ["games and media"]}))
     assert picked == ["games and media"]
 
 

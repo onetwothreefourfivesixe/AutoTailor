@@ -30,6 +30,19 @@
 	const PROVIDERS = ['ollama', 'anthropic', 'openai', 'google_genai'];
 	const STEPS = ['extract', 'score', 'tailor', 'humanize'];
 
+	// USAJOBS API key: saved to .env by the API, never shown again.
+	let usajobsKey = $state('');
+	async function saveUsajobsKey() {
+		try {
+			await send('PUT', '/setup/keys', { provider: 'usajobs', key: usajobsKey.trim() });
+			usajobsKey = '';
+			toasts.show('USAJOBS key saved to .env.');
+			await invalidateAll();
+		} catch (e) {
+			toasts.show(e instanceof ApiError ? e.message : 'That failed.', 'error');
+		}
+	}
+
 	async function save() {
 		saving = true;
 		try {
@@ -158,7 +171,23 @@
 					<label><span class="label">{label}</span><input class="input" type="number" min="1" bind:value={s.tailor[k]} /></label>
 				{/each}
 				<label class="flex items-start gap-2 text-sm sm:col-span-2"><input type="checkbox" bind:checked={s.tailor.fill_page} />
-					<span>Fill the page <span class="block text-xs text-muted">After tailoring, add your next most relevant CV bullets (word for word, spread across sections) until the page is full, or trim a resume that runs over one page.</span></span></label>
+					<span>Fill the page <span class="block text-xs text-muted">After tailoring, add the rest of your usual resume, then your next most relevant CV bullets (word for word), until the page is full; or trim a resume that runs over one page.</span></span></label>
+				<label><span class="label">Bullet wording</span>
+					<select class="input" bind:value={s.tailor.rewording}>
+						<option value="light">Yours, with the posting's term swapped in where it says the same thing</option>
+						<option value="off">Yours, word for word</option>
+					</select></label>
+				<label><span class="label">Order of jobs and projects</span>
+					<select class="input" bind:value={s.resume.entry_order}>
+						<option value="relevance">Most relevant to the posting first</option>
+						<option value="cv">As in my CV</option>
+					</select></label>
+				<label><span class="label">Skills section</span>
+					<select class="input" bind:value={s.resume.skills}>
+						<option value="all">All my skills, the posting's first</option>
+						<option value="relevant">Only the skills the posting asks for</option>
+					</select></label>
+				<p class="text-xs text-muted sm:col-span-2">Tailoring starts from your usual resume: tick “usual” on its bullets in Master CV. “Hide from resumes” keeps an entry (say, high school) out of every resume.</p>
 			</section>
 		{:else if data.section === 'sources'}
 			<section class="card space-y-4 p-5">
@@ -173,6 +202,35 @@
 					<label><span class="label">Keep titles containing (one per line; empty keeps all)</span><textarea class="input h-24" value={lines(s.sources.title_include)} oninput={(e) => (s.sources.title_include = parse(e.currentTarget.value))}></textarea></label>
 					<label><span class="label">Drop titles containing</span><textarea class="input h-24" value={lines(s.sources.title_exclude)} oninput={(e) => (s.sources.title_exclude = parse(e.currentTarget.value))}></textarea></label>
 				</div>
+				<div class="grid gap-3 md:grid-cols-2">
+					<label><span class="label">Skip postings older than (days; 0 for no cutoff)</span><input class="input" type="number" min="0" bind:value={s.sources.max_age_days} /></label>
+					<label class="flex items-center gap-2 self-end text-sm"><input type="checkbox" bind:checked={s.sources.keep_undated} /> Keep postings with no publish date</label>
+					<label class="flex items-start gap-2 text-sm md:col-span-2"><input type="checkbox" bind:checked={s.sources.delete_expired} />
+						<span>Delete saved postings once they're older than the cutoff <span class="block text-xs text-muted">Checked at every fetch and rank, by publish date (or by when first pulled, if undated). Postings you tailored, applied to or added questions for are kept. Pasted postings are never skipped when you add them.</span></span></label>
+				</div>
+				<section class="space-y-3 rounded-lg border border-line p-4" aria-label="Federal jobs (USAJOBS)">
+					<label class="flex items-start gap-2 text-sm"><input type="checkbox" bind:checked={s.sources.usajobs} />
+						<span><b>Federal jobs (USAJOBS)</b> <span class="block text-xs text-muted">The U.S. government's official job site: federal internships (including Pathways) and policy, legal, analyst and technical roles. Fetched with the job boards.</span></span></label>
+					{#if s.sources.usajobs}
+						<div class="grid gap-3 pl-6 md:grid-cols-2">
+							<label><span class="label">Your contact email (USAJOBS asks every request to include one; sent only to USAJOBS)</span><input class="input" type="email" bind:value={s.sources.usajobs_email} placeholder="you@example.com" /></label>
+							<div>
+								<span class="label">API key {data.keys.usajobs ? '(saved)' : '(needed)'}</span>
+								<div class="flex gap-2">
+									<input class="input min-w-0 flex-1" type="password" bind:value={usajobsKey} placeholder={data.keys.usajobs ? 'Saved; paste a new one to replace it' : 'Paste your key'} autocomplete="off" aria-label="USAJOBS API key" />
+									<button class="btn" disabled={!usajobsKey.trim()} onclick={saveUsajobsKey}>Save key</button>
+								</div>
+								<p class="mt-1 text-xs text-muted">Free: request one at <a class="text-accent hover:underline" href="https://developer.usajobs.gov/apirequest/" target="_blank" rel="noreferrer">developer.usajobs.gov</a> (it arrives by email). Saved to .env on this computer.</p>
+							</div>
+							<label><span class="label">Search terms, one per line (empty: every posting)</span><textarea class="input h-24" value={lines(s.sources.usajobs_keywords)} oninput={(e) => (s.sources.usajobs_keywords = parse(e.currentTarget.value))} placeholder="policy"></textarea></label>
+							<fieldset><legend class="label">Who the postings are for</legend>
+								{#each [['student', 'Students (internships, Pathways)'], ['graduates', 'Recent graduates'], ['public', 'Open to the public']] as [k, label] (k)}
+									<label class="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.sources.usajobs_hiring_paths.includes(k)} onchange={(e) => (s.sources.usajobs_hiring_paths = e.currentTarget.checked ? [...s.sources.usajobs_hiring_paths, k] : s.sources.usajobs_hiring_paths.filter((x: string) => x !== k))} /> {label}</label>
+								{/each}
+							</fieldset>
+						</div>
+					{/if}
+				</section>
 				<p class="text-xs text-muted">LinkedIn, Handshake, Runway, Indeed and Glassdoor are never fetched; paste those postings with Add.</p>
 			</section>
 		{:else if data.section === 'mail'}

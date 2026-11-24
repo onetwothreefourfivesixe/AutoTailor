@@ -26,6 +26,7 @@ class Source(StrEnum):
     ASHBY = "ashby"
     PASTE = "paste"
     RUNWAY = "runway"
+    USAJOBS = "usajobs"
 
 
 class PostingStatus(StrEnum):
