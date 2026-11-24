@@ -4,7 +4,8 @@ import type { JobRow } from '$lib/types';
 
 const PAGE_SIZE = 100;
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, depends }) => {
+	depends('app:live'); // reloaded when background work finishes
 	const p = new URLSearchParams();
 	for (const k of ['verdict', 'q', 'source', 'min_fit', 'has_resume', 'applied', 'hidden', 'cut', 'sort']) {
 		const v = url.searchParams.get(k);

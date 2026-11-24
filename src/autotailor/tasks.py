@@ -38,7 +38,8 @@ from pathlib import Path
 from autotailor import db
 
 IDLE_EXIT = 30 * 60
-POLL = 1.0
+POLL = 0.25  # how often an idle worker looks for queued work
+LOG_FLUSH = 0.5  # how often a running task's new output is saved (and seen by the UI)
 WINDOWS = sys.platform == "win32"
 LOG_LIMIT = 200_000  # characters of output kept per task
 
@@ -165,6 +166,16 @@ def recent(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
 
 
+SUMMARY_COLUMNS = ("id", "kind", "args_json", "status", "done", "total", "message",
+                   "created_at", "started_at", "finished_at", "updated_at")  # fmt: skip
+
+
+def recent_summaries(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
+    """Like `recent`, without the logs (up to LOG_LIMIT characters each): for lists polled often."""
+    cols = ", ".join(SUMMARY_COLUMNS)
+    return [dict(r) for r in conn.execute(f"SELECT {cols} FROM tasks ORDER BY id DESC LIMIT ?", (limit,))]
+
+
 def active(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM tasks WHERE status IN ('queued', 'running') ORDER BY id").fetchall()
 
@@ -190,7 +201,7 @@ def _claim(conn: sqlite3.Connection) -> sqlite3.Row | None:
 
 def _append_log(conn: sqlite3.Connection, task_id: int, text: str) -> None:
     conn.execute(
-        "UPDATE tasks SET log = substr(log || ?, -?) WHERE id = ?", (text, LOG_LIMIT, task_id)
+        "UPDATE tasks SET log = substr(log || ?, -?), updated_at = ? WHERE id = ?", (text, LOG_LIMIT, _now(), task_id)
     )
     conn.commit()
 
@@ -213,8 +224,8 @@ def report_progress(done: int | None, total: int | None, message: str | None = N
 
     try:
         conn = db.connect(db_path or get_paths().db)
-        conn.execute("UPDATE tasks SET done = ?, total = ?, message = COALESCE(?, message) WHERE id = ?",
-                     (done, total, message, tid))  # fmt: skip
+        conn.execute("UPDATE tasks SET done = ?, total = ?, message = COALESCE(?, message), updated_at = ? WHERE id = ?",
+                     (done, total, message, _now(), tid))  # fmt: skip
         conn.commit()
         conn.close()
     except sqlite3.Error:
@@ -273,7 +284,7 @@ def run_task(conn: sqlite3.Connection, task: sqlite3.Row, home: Path) -> str:
     t.start()
     interrupted = False
     while proc.poll() is None:
-        time.sleep(POLL)
+        time.sleep(LOG_FLUSH)
         with lock:
             chunk, lines[:] = "".join(lines), []
         if chunk:
@@ -290,9 +301,38 @@ def run_task(conn: sqlite3.Connection, task: sqlite3.Row, home: Path) -> str:
         if lines:
             _append_log(conn, task["id"], "".join(lines))
     status = "cancelled" if interrupted else ("done" if proc.returncode == 0 else "failed")
-    conn.execute("UPDATE tasks SET status = ?, finished_at = ?, pid = NULL WHERE id = ?", (status, _now(), task["id"]))
+    # A failed task says why in its own row, so the UI can show it without opening the log.
+    message = None
+    if status == "failed":
+        row = get(conn, task["id"])
+        message = failure_reason(row["log"] if row else "") or f"exited with code {proc.returncode}"
+    elif status == "cancelled":
+        message = "stopped"
+    conn.execute("UPDATE tasks SET status = ?, finished_at = ?, updated_at = ?, pid = NULL, message = COALESCE(?, message) "
+                 "WHERE id = ?", (status, _now(), _now(), message, task["id"]))  # fmt: skip
     conn.commit()
     return status
+
+
+_BOX = set("│┃|┌┐└┘├┤┬┴┼─━═+-=~ \t")
+
+
+def failure_reason(log: str, limit: int = 240) -> str | None:
+    """The line that best says why a task failed: the last error line of its output.
+
+    Tracebacks end with `SomeError: message`; Rich draws them in boxes, whose border
+    lines are skipped. Falls back to the last line with text in it.
+    """
+    lines = []
+    for raw in reversed((log or "").splitlines()[-200:]):
+        line = raw.strip().strip("│┃|").strip()
+        if line and not set(line) <= _BOX:
+            lines.append(line)
+    for line in lines:
+        head = line.split(":", 1)[0]
+        if line.startswith(("Error", "error:")) or (head.endswith(("Error", "Exception")) and " " not in head):
+            return line[:limit]
+    return lines[0][:limit] if lines else None
 
 
 def worker_loop(home: Path, once: bool = False, idle_exit: float = IDLE_EXIT) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,7 +22,10 @@ from autotailor.config import Settings
 from autotailor.models import ArtifactKind, TailoredResume, Verdict
 from autotailor.resume.layout import EditableLayout
 
-EVENT_POLL = 1.5
+EVENT_POLL = 0.5  # seconds between checks for task changes (one cheap query)
+NEEDS_EVERY = 3.0  # the Needs-you count reads files too: at most this often, or when a task changes
+OLLAMA_TAGS_TTL = 15.0  # seconds a list of pulled Ollama models is reused
+_OLLAMA_TAGS: dict[str, tuple[float, list[dict] | None]] = {}
 
 
 class BulkIn(BaseModel):
@@ -73,45 +77,52 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         """Server-sent events for the whole app: `tasks` (active and recently finished),
         `needs` (count), `runs` (latest run), `postings` (count). Sent when they change."""
         paths = _paths(request)
+        # One connection for the life of the stream (opening one costs ~10 ms); used by one
+        # worker thread at a time.
+        conn = db.connect(paths.db, any_thread=True)
+        needs_at = -NEEDS_EVERY
+        needs: int | None = None
 
-        def snapshot() -> dict[str, Any]:
+        def snapshot(tasks_changed: bool) -> dict[str, Any]:
+            nonlocal needs_at, needs
             from autotailor import inbox
             from autotailor.config import load_settings
 
-            conn = db.connect(paths.db)
-            try:
-                recent = [{k: r[k] for k in ("id", "kind", "args_json", "status", "done", "total", "message",
-                                              "created_at", "started_at", "finished_at")}
-                          for r in tasks.recent(conn, 8)]  # fmt: skip
-                latest = db.list_runs(conn, 1)
+            recent = tasks.recent_summaries(conn, 8)  # without the logs
+            if tasks_changed or time.monotonic() - needs_at >= NEEDS_EVERY:
                 try:
                     needs = len(inbox.collect(conn, load_settings(paths.config), paths.outputs))
                 except Exception:  # an invalid config shouldn't stop the stream
                     needs = None
-                return {
-                    "tasks": recent,
-                    "needs": {"count": needs},
-                    "runs": {"latest": dict(latest[0]) if latest else None},
-                    "postings": {"count": db.table_counts(conn)["postings"]},
-                }
-            finally:
-                conn.close()
+                needs_at = time.monotonic()
+            latest = db.list_runs(conn, 1)
+            return {
+                "tasks": recent,
+                "needs": {"count": needs},
+                "runs": {"latest": dict(latest[0]) if latest else None},
+                "postings": {"count": db.table_counts(conn)["postings"]},
+            }
 
         async def stream():  # noqa: ANN202
             last: dict[str, str] = {}
             beat = 0.0
-            while not await request.is_disconnected():
-                snap = await asyncio.to_thread(snapshot)
-                for name, value in snap.items():
-                    data = json.dumps(value, default=str)
-                    if last.get(name) != data:
-                        last[name] = data
-                        yield f"event: {name}\ndata: {data}\n\n"
-                beat += EVENT_POLL
-                if beat >= 15:
-                    beat = 0.0
-                    yield ": keep-alive\n\n"
-                await asyncio.sleep(EVENT_POLL)
+            try:
+                while not await request.is_disconnected():
+                    snap = await asyncio.to_thread(snapshot, False)
+                    if json.dumps(snap["tasks"], default=str) != last.get("tasks"):
+                        snap = await asyncio.to_thread(snapshot, True)  # a task changed: recount what needs you now
+                    for name, value in snap.items():
+                        data = json.dumps(value, default=str)
+                        if last.get(name) != data:
+                            last[name] = data
+                            yield f"event: {name}\ndata: {data}\n\n"
+                    beat += EVENT_POLL
+                    if beat >= 15:
+                        beat = 0.0
+                        yield ": keep-alive\n\n"
+                    await asyncio.sleep(EVENT_POLL)
+            finally:
+                conn.close()
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
@@ -586,12 +597,18 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         from autotailor.config import STEPS
 
         m = settings.models
-        try:
-            tags = httpx.get(f"{m.ollama_base_url.rstrip('/')}/api/tags", timeout=5).json()["models"]
-            pulled = [{"name": t["name"], "size": t["size"], "parameters": t.get("details", {}).get("parameter_size")}
-                      for t in tags]  # fmt: skip
-        except (httpx.HTTPError, KeyError, ValueError):
-            pulled = None
+        url = m.ollama_base_url.rstrip("/")
+        cached = _OLLAMA_TAGS.get(url)
+        if cached and time.monotonic() - cached[0] < OLLAMA_TAGS_TTL:
+            pulled = cached[1]
+        else:
+            try:
+                tags = httpx.get(f"{url}/api/tags", timeout=3).json()["models"]
+                pulled = [{"name": t["name"], "size": t["size"], "parameters": t.get("details", {}).get("parameter_size")}
+                          for t in tags]  # fmt: skip
+            except (httpx.HTTPError, KeyError, ValueError):
+                pulled = None
+            _OLLAMA_TAGS[url] = (time.monotonic(), pulled)
         names = {p["name"] for p in pulled or []} | {p["name"].removesuffix(":latest") for p in pulled or []}
         steps = []
         for step in [*STEPS, "embeddings"]:

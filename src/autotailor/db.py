@@ -14,7 +14,7 @@ from pathlib import Path
 from autotailor.dedupe import dedupe_key, locations_compatible, normalize_url
 from autotailor.models import FitAssessment, JobPosting, Match, PostingStatus, Requirements, Verdict
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS postings (
@@ -230,6 +230,11 @@ CREATE TABLE IF NOT EXISTS cut_postings (
 CREATE INDEX IF NOT EXISTS idx_cut_url_key ON cut_postings (url_key);
 """
 
+# When a running task last printed output or reported progress (to tell busy from stuck).
+_SCHEMA_V9 = """
+ALTER TABLE tasks ADD COLUMN updated_at TEXT;
+"""
+
 _MIGRATIONS = {
     1: (_SCHEMA_V1, None),
     2: (_SCHEMA_V2, _backfill_v2),
@@ -239,6 +244,7 @@ _MIGRATIONS = {
     6: (_SCHEMA_V6, None),
     7: (_SCHEMA_V7, None),
     8: (_SCHEMA_V8, None),
+    9: (_SCHEMA_V9, None),
 }
 
 

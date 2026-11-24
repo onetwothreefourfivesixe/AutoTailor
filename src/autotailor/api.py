@@ -302,7 +302,7 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 (one place lists every route)
 
     @app.get("/api/tasks")
     def task_list(conn=Depends(_conn), limit: int = 20) -> list[dict]:  # noqa: ANN001
-        return [{k: v for k, v in dict(r).items() if k != "log"} for r in tasks.recent(conn, limit)]
+        return tasks.recent_summaries(conn, limit)
 
     @app.post("/api/tasks", status_code=201)
     def task_start(body: TaskIn, request: Request, conn=Depends(_conn)) -> dict:  # noqa: ANN001

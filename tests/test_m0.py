@@ -86,7 +86,7 @@ def test_model_kwargs_per_provider():
         "max_output_tokens": 16000
     }
     assert model_kwargs(ModelSpec(provider="ollama", model="m"), s) == {
-        "base_url": "http://localhost:11434",
+        "base_url": "http://127.0.0.1:11434",  # IPv4: `localhost` costs ~2 s per call on Windows
         "num_predict": 16000,
         "num_ctx": 16384,
     }
