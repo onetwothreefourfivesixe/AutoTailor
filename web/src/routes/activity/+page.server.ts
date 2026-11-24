@@ -2,7 +2,8 @@ import type { PageServerLoad } from './$types';
 import { json } from '$lib/server/api';
 import type { AiCall, Task } from '$lib/types';
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, depends }) => {
+	depends('app:live'); // reloaded when background work finishes
 	const step = url.searchParams.get('step');
 	const [tasks, calls] = await Promise.all([
 		json<Task[]>('/api/tasks?limit=50'),

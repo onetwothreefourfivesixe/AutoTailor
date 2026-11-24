@@ -8,4 +8,7 @@ interface RunDetail {
 	outputs: { index: number; posting_id: string; company: string; title: string; pdf: string | null; docx: string | null; model: string | null }[];
 }
 
-export const load: PageServerLoad = async ({ params }) => ({ detail: await json<RunDetail>(`/api/runs/${encodeURIComponent(params.id)}`) });
+export const load: PageServerLoad = async ({ params, depends }) => {
+	depends('app:live'); // reloaded when background work finishes
+	return { detail: await json<RunDetail>(`/api/runs/${encodeURIComponent(params.id)}`) };
+};

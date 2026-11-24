@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { get, send } from '$lib/client/api';
 	import { taskLabel, when } from '$lib/format';
@@ -15,6 +16,15 @@
 	async function output(t: Task) {
 		if (logs[t.id] === undefined) logs[t.id] = (await get<Task>(`/tasks/${t.id}`)).log ?? '';
 	}
+
+	// /activity#task-<id> (from a notice or the task tray) opens that task's log.
+	let opened = $state<number | null>(null);
+	onMount(() => {
+		const m = location.hash.match(/^#task-(\d+)$/);
+		if (!m) return;
+		opened = Number(m[1]);
+		requestAnimationFrame(() => document.getElementById(`task-${opened}`)?.scrollIntoView({ block: 'start' }));
+	});
 </script>
 
 <svelte:head><title>Activity · AutoTailor</title></svelte:head>
@@ -26,8 +36,8 @@
 	{#if tab === 'tasks'}
 		<ul class="space-y-2">
 			{#each data.tasks as t (t.id)}
-				<li class="card">
-					<details ontoggle={(e) => e.currentTarget.open && output(t)}>
+				<li class="card scroll-mt-4" id="task-{t.id}">
+					<details open={opened === t.id} ontoggle={(e) => e.currentTarget.open && output(t)}>
 						<summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 p-3 text-sm">
 							<span class="font-medium">{taskLabel(t.kind, t.args_json)}</span>
 							<span class="flex items-center gap-3 text-xs text-muted">
@@ -36,6 +46,7 @@
 								{#if t.status === 'running' || t.status === 'queued'}<button class="btn btn-sm" onclick={(e) => { e.preventDefault(); send('POST', `/tasks/${t.id}/cancel`); }}>Stop</button>{/if}
 							</span>
 						</summary>
+						{#if t.status === 'failed' && t.message}<p class="border-t border-line px-3 py-2 text-xs text-danger">{t.message}</p>{/if}
 						<pre class="max-h-96 overflow-auto border-t border-line bg-sunken p-3 text-xs whitespace-pre-wrap">{logs[t.id] ?? 'Loading…'}</pre>
 					</details>
 				</li>

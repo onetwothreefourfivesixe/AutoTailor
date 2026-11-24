@@ -2,7 +2,7 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { invalidateAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
 	import { live } from '$lib/client/live.svelte';
 	import TaskTray from '$lib/components/TaskTray.svelte';
 	import Toasts from '$lib/components/Toasts.svelte';
@@ -44,7 +44,7 @@
 		const n = live.changed;
 		if (n !== seen) {
 			seen = n;
-			invalidateAll();
+			invalidate('app:live'); // only pages showing pipeline data; forms keep their edits
 		}
 	});
 

@@ -127,19 +127,25 @@
 				<h2 class="h2">Models</h2>
 				<a href="/settings/models" class="text-xs text-accent hover:underline">Change</a>
 			</div>
-			<ul class="space-y-2 text-sm">
-				{#each data.models.steps as s (s.step)}
-					<li class="flex items-center justify-between gap-2">
-						<span class="w-20 shrink-0 text-muted">{s.step}</span>
-						<span class="min-w-0 flex-1 truncate font-mono text-xs" title={s.model}>{s.model}</span>
-						{#if s.pulled === false}
-							<span class="rounded bg-danger-bg px-1.5 py-0.5 text-xs text-danger" title="ollama pull {s.model}">not pulled</span>
-						{:else}
-							<ModelTag local={s.local} name={s.provider} />
-						{/if}
-					</li>
-				{/each}
-			</ul>
+			{#await data.models}
+				<p class="text-sm text-muted">Checking models…</p>
+			{:then models}
+				<ul class="space-y-2 text-sm">
+					{#each models.steps as s (s.step)}
+						<li class="flex items-center justify-between gap-2">
+							<span class="w-20 shrink-0 text-muted">{s.step}</span>
+							<span class="min-w-0 flex-1 truncate font-mono text-xs" title={s.model}>{s.model}</span>
+							{#if s.pulled === false}
+								<span class="rounded bg-danger-bg px-1.5 py-0.5 text-xs text-danger" title="ollama pull {s.model}">not pulled</span>
+							{:else}
+								<ModelTag local={s.local} name={s.provider} />
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{:catch}
+				<p class="text-sm text-muted">Couldn't check the models.</p>
+			{/await}
 		</section>
 
 		<section class="card p-4">

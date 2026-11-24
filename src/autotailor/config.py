@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _Model(BaseModel):
@@ -241,7 +241,20 @@ class ModelSettings(_Model):
     embeddings: EmbeddingSpec = Field(default_factory=EmbeddingSpec)
     # Per-step overrides; a step not listed here uses `default`.
     steps: dict[Step, ModelSpec] = Field(default_factory=dict)
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def _ipv4_loopback(cls, url: str) -> str:
+        """`localhost` -> 127.0.0.1. Ollama listens on IPv4 only, and on Windows `localhost`
+        tries IPv6 (::1) first and waits about 2 s for that to fail on every request."""
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(url)
+        if parts.hostname != "localhost":
+            return url
+        netloc = "127.0.0.1" + (f":{parts.port}" if parts.port else "")
+        return urlunsplit(parts._replace(netloc=netloc))
 
     def for_step(self, step: Step) -> ModelSpec:
         return self.steps.get(step, self.default)

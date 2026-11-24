@@ -155,6 +155,8 @@ export interface Task {
 	created_at: string;
 	started_at: string | null;
 	finished_at: string | null;
+	/** Last output or progress from the running task. */
+	updated_at?: string | null;
 	log?: string;
 }
 

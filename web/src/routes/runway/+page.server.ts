@@ -13,7 +13,8 @@ interface Role {
 	seen_at: string;
 }
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ depends }) => {
+	depends('app:live'); // reloaded when background work finishes
 	const [roles, runwayJobs] = await Promise.all([json<Role[]>('/api/runway'), json<JobRow[]>('/api/jobs?source=runway&limit=500')]);
 	const needsLink = new Set(runwayJobs.filter((j) => j.status === 'needs_link').map((j) => j.id));
 	return { roles, needsLink: [...needsLink] };
