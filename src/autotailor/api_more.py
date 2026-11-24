@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from autotailor import db, tasks
 from autotailor.config import Settings
 from autotailor.models import ArtifactKind, TailoredResume, Verdict
+from autotailor.resume.layout import EditableLayout
 
 EVENT_POLL = 1.5
 
@@ -211,7 +212,8 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         }
 
     @app.get("/api/jobs/{posting_id}/resume")
-    def job_resume(posting_id: str, request: Request, conn=Depends(_conn)) -> dict:  # noqa: ANN001
+    def job_resume(posting_id: str, request: Request, conn=Depends(_conn),  # noqa: ANN001
+                   settings: Settings = Depends(_settings)) -> dict:  # fmt: skip
         """The latest tailored resume: bullets beside their CV source, every draft, file links."""
         from autotailor.cv import load_master_cv
         from autotailor.ui.logic import resume_diff
@@ -241,10 +243,19 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             cv_bullets = [{"id": i, "text": texts[i].text, "entry": getattr(e, "title", None) or getattr(e, "school", "")}
                           for i, e in cv.entry_of().items() if i not in hidden]  # fmt: skip
             cv_skills = [{"name": g.name, "items": g.items} for g in cv.skills]
-        from autotailor.resume.output import ORIGINAL
+        from autotailor.resume.layout import editable
+        from autotailor.resume.output import EDITED_LAYOUT, ORIGINAL, Style
 
+        edited_layout = folder / EDITED_LAYOUT
+        if edited_layout.exists():
+            page = editable(json.loads(edited_layout.read_text(encoding="utf-8")))
+        elif cv is not None:
+            page = editable(Style.from_settings(settings, _paths(request)).layout(resume, cv))
+        else:
+            page = None
         return {
-            "edited": (folder / ORIGINAL).exists(), "cv_bullets": cv_bullets, "cv_skills": cv_skills,
+            "edited": (folder / ORIGINAL).exists() or edited_layout.exists(), "layout": page,
+            "layout_edited": edited_layout.exists(), "cv_bullets": cv_bullets, "cv_skills": cv_skills,
             "run_id": data["run_id"], "model": data["model"], "created_at": data["created_at"],
             "pdf": files.get(ArtifactKind.RESUME_PDF.value), "docx": files.get(ArtifactKind.RESUME_DOCX.value),
             "pages": pdf_page_count(pdf.read_bytes()) if pdf and pdf.exists() else None,
@@ -306,20 +317,63 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             "bullets": [TailoredBullet(source_id=b.source_id, text=" ".join(b.text.split())) for b in body.bullets],
             "skills": [skills[s.lower()] for s in body.skills],
         })  # fmt: skip
+        from autotailor.resume.output import EDITED_LAYOUT
+
+        (_resume_files(conn, request, posting_id)["folder"] / EDITED_LAYOUT).unlink(missing_ok=True)  # bullets win now
         return _save_resume(conn, request, posting_id, resume, settings)
+
+    @app.post("/api/jobs/{posting_id}/resume/preview")
+    def preview_layout(posting_id: str, body: EditableLayout, request: Request,
+                       settings: Settings = Depends(_settings)) -> Response:  # fmt: skip
+        """The final editor's layout rendered as a PNG (all pages), without saving. Pages in X-Pages."""
+        from autotailor.resume.layout import normalize
+        from autotailor.resume.output import Style
+        from autotailor.resume.render import pdf_page_count, pdf_to_png
+
+        try:
+            pdf = Style.from_settings(settings, _paths(request)).render(normalize(body))
+        except Exception as e:  # LaTeX errors (e.g. in a custom template)
+            raise HTTPException(422, f"Couldn't render it: {e}") from e
+        return Response(pdf_to_png(pdf, scale=2.0), media_type="image/png",
+                        headers={"X-Pages": str(pdf_page_count(pdf)), "Cache-Control": "no-store"})  # fmt: skip
+
+    @app.put("/api/jobs/{posting_id}/resume/layout")
+    def save_layout(posting_id: str, body: EditableLayout, request: Request, conn=Depends(_conn),  # noqa: ANN001
+                    settings: Settings = Depends(_settings)) -> dict:  # fmt: skip
+        """Save the final editor's version of the page: everything on it, as typed. The PDF and Word
+        files are rendered again; the tailored version can be restored."""
+        from autotailor.cv import load_master_cv
+        from autotailor.resume.layout import normalize
+        from autotailor.resume.output import Style, save_layout_edit
+
+        p = _need(db.get_posting(conn, posting_id), f"posting {posting_id}")
+        f = _resume_files(conn, request, posting_id)
+        layout = normalize(body)
+        if not layout["name"] or not layout["sections"]:
+            raise HTTPException(422, "The resume needs your name and at least one section with something in it.")
+        saved = TailoredResume.model_validate_json(f["data"].read_text(encoding="utf-8"))
+        try:
+            out = save_layout_edit(f["folder"], f["pdf"], f["docx"], layout, load_master_cv(_paths(request).master_cv),
+                                   Style.from_settings(settings, _paths(request)), saved.keywords,
+                                   f"{p.title}\n{p.description or ''}")  # fmt: skip
+        except Exception as e:  # LaTeX errors in a custom template
+            raise HTTPException(422, f"Couldn't render the resume: {e}") from e
+        return {"pages": out.pages, "warnings": out.warnings, "keyword_score": out.keyword_score}
 
     @app.post("/api/jobs/{posting_id}/resume/restore")
     def restore_resume(posting_id: str, request: Request, conn=Depends(_conn),  # noqa: ANN001
                        settings: Settings = Depends(_settings)) -> dict:  # fmt: skip
         """Undo every hand edit: back to the resume as AutoTailor tailored it."""
-        from autotailor.resume.output import ORIGINAL
+        from autotailor.resume.output import EDITED_LAYOUT, ORIGINAL
 
         f = _resume_files(conn, request, posting_id)
-        original = f["folder"] / ORIGINAL
-        if not original.exists():
+        original, edited_layout = f["folder"] / ORIGINAL, f["folder"] / EDITED_LAYOUT
+        if not original.exists() and not edited_layout.exists():
             raise HTTPException(404, "This resume hasn't been edited.")
-        out = _save_resume(conn, request, posting_id, TailoredResume.model_validate_json(original.read_text(encoding="utf-8")), settings)
-        original.unlink()
+        source = original if original.exists() else f["data"]
+        out = _save_resume(conn, request, posting_id, TailoredResume.model_validate_json(source.read_text(encoding="utf-8")), settings)
+        original.unlink(missing_ok=True)
+        edited_layout.unlink(missing_ok=True)
         fit_file = f["folder"] / "fit.json"
         if fit_file.exists():
             fit = json.loads(fit_file.read_text(encoding="utf-8"))

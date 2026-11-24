@@ -124,8 +124,18 @@ export interface JobDetail {
 	has_resume: boolean;
 }
 
+export interface EditableItem { title: string; organization: string; location: string; dates: string; stack: string; bullets: string[] }
+export interface EditableLayout {
+	name: string;
+	contact_items: { text: string; url: string | null }[];
+	sections: { key: string; title: string; items: EditableItem[] }[];
+	skills: { name: string; items: string }[];
+}
+
 export interface ResumeView {
 	edited: boolean;
+	layout: EditableLayout | null;
+	layout_edited: boolean;
 	cv_bullets: { id: string; text: string; entry: string }[];
 	cv_skills: { name: string; items: string[] }[];
 	run_id: number;

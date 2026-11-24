@@ -224,3 +224,57 @@ def test_low_fit_and_old_postings_are_deleted_but_protected_ones_stay(client, mo
     assert client.delete("/api/cut/lever:low").status_code == 404
     db.compact(conn)
     conn.close()
+
+
+def test_final_editor_edits_the_whole_page(client, monkeypatch):
+    _tailor(client, monkeypatch)
+    view = client.get("/api/jobs/lever:a/resume").json()
+    page = view["layout"]
+    assert not view["layout_edited"] and page["name"] and page["sections"][0]["key"] == "education"
+    work = next(s for s in page["sections"] if s["key"] == "experience")
+
+    # Everything on the page is editable: header, section titles, entries, bullets (own words), skills.
+    page["name"] = "Sam Q. Example"
+    page["contact_items"].append({"text": "sam.dev", "url": "https://sam.dev"})
+    work["title"] = "Research"
+    work["items"][0]["dates"] = "Summer 2026"
+    work["items"][0]["bullets"] = ["Wrote a brand-new bullet about 7 robots", work["items"][0]["bullets"][0], "   "]
+    page["sections"].append({"key": "custom", "title": "Interests", "items": [{"title": "Chess, climbing", "bullets": []}]})
+    page["skills"] = [{"name": "Languages", "items": "Python, C++"}]
+
+    r = client.post("/api/jobs/lever:a/resume/preview", json=page)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.headers["X-Pages"] == "1"
+    assert not client.get("/api/jobs/lever:a/resume").json()["layout_edited"]  # a preview saves nothing
+
+    saved = client.put("/api/jobs/lever:a/resume/layout", json=page).json()
+    assert saved["pages"] == 1 and any("7" in w for w in saved["warnings"])  # a new number: a note
+    after = client.get("/api/jobs/lever:a/resume").json()
+    assert after["edited"] and after["layout_edited"] and after["layout"]["name"] == "Sam Q. Example"
+    work2 = next(s for s in after["layout"]["sections"] if s["key"] == "experience")
+    assert work2["title"] == "Research" and work2["items"][0]["dates"] == "Summer 2026"
+    assert work2["items"][0]["bullets"][0].startswith("Wrote a brand-new bullet") and len(work2["items"][0]["bullets"]) == 2
+    assert after["layout"]["sections"][-1]["title"] == "Interests"
+
+    bad = {**page, "sections": []}
+    assert client.put("/api/jobs/lever:a/resume/layout", json=bad).status_code == 422
+
+    assert client.post("/api/jobs/lever:a/resume/restore").status_code == 200
+    back = client.get("/api/jobs/lever:a/resume").json()
+    assert not back["edited"] and back["layout"]["name"] != "Sam Q. Example"
+
+
+def test_normalize_places_the_corners():
+    from autotailor.resume.layout import EditableLayout, editable, normalize
+
+    e = EditableLayout(name=" Sam ", contact_items=[{"text": "a@b.c", "url": "mailto:a@b.c"}, {"text": " "}], sections=[
+        {"key": "experience", "title": "Work Experience", "items": [
+            {"title": "Intern", "organization": "Acme", "location": "Denver", "dates": "2026", "bullets": ["Did a thing"]}]},
+        {"key": "projects", "title": "Things I Built", "items": [{"title": "Bot", "dates": "2025", "stack": "Python"}, {}]},
+    ], skills=[{"name": "Languages", "items": "Python"}, {"name": "Empty", "items": " "}])  # fmt: skip
+    out = normalize(e)
+    job, proj = out["sections"][0]["items"][0], out["sections"][1]["items"][0]
+    assert (job["left1"], job["right1"], job["left2"], job["right2"]) == ("Acme", "Denver", "Intern", "2026")
+    assert (proj["left1"], proj["right1"], proj["stack_on"]) == ("Bot", "2025", "left1")
+    assert len(out["sections"][1]["items"]) == 1 and out["contact"] == "a@b.c" and len(out["skills"]) == 1
+    assert out["sections"][0]["renamed"] is False and out["sections"][1]["renamed"] is True
+    assert normalize(EditableLayout(**editable(out))) == out  # round trip

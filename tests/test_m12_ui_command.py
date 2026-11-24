@@ -36,3 +36,11 @@ def test_ui_needs_node(tmp_path, monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: None)
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 1 and "Node.js" in r.output
+
+
+def test_ui_does_not_open_a_browser_unless_asked():
+    import typer.main
+
+    ui = typer.main.get_command(app).commands["ui"]  # type: ignore[attr-defined]
+    browser = next(p for p in ui.params if p.name == "browser")
+    assert browser.default is False and "--browser" in browser.opts

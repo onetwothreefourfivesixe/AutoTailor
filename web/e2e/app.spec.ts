@@ -51,13 +51,12 @@ test('a job: override the verdict, mark it applied, see it on the board', async 
 	await expect(page.getByRole('region', { name: 'Interview' }).getByText('Northwind Robotics')).toBeVisible();
 });
 
-test('master CV: edit, save, and the preview renders', async ({ page }) => {
+test('master CV: edit and save', async ({ page }) => {
 	await open(page, '/cv');
-	await expect(page.getByAltText('A sample resume from this CV')).toBeVisible({ timeout: 30_000 });
 	await page.getByRole('tab', { name: /Contact/ }).click();
 	await page.getByLabel('Name').fill('Sam Q. Example');
 	await page.getByRole('button', { name: 'Save CV' }).click();
-	await expect(page.getByText('CV saved')).toBeVisible();
+	await expect(page.getByText('Saved. The previous version is kept')).toBeVisible();
 	await page.reload();
 	await page.locator('body[data-ready]').waitFor();
 	await page.getByRole('tab', { name: /Contact/ }).click();
@@ -113,16 +112,22 @@ test('setup wizard: models, CV from a file, about you, job boards', async ({ pag
 	await expect(page.getByLabel(/greenhouse/i)).toHaveValue(/stripe/);
 });
 
-test('a tailored resume: enlarge it, edit a bullet, save, restore', async ({ page }) => {
+test('a tailored resume: enlarge it, edit the whole page with a live preview, save, restore', async ({ page }) => {
 	await open(page, '/jobs/lever%3Ae2e-a?tab=resume');
 	await page.getByRole('button', { name: 'Open the resume full size, with editing' }).click();
 	const viewer = page.getByRole('dialog', { name: 'Resume' });
 	await expect(viewer.getByAltText('The tailored resume, full size')).toBeVisible();
-	await viewer.getByRole('button', { name: 'Edit' }).click();
-	await expect(viewer.getByLabel('Bullet text')).toHaveCount(2);
-	await viewer.getByLabel('Remove bullet').last().click();
-	await viewer.getByLabel('Bullet text').first().fill('Trained a YOLO-based object detector in PyTorch on 12k labeled warehouse images');
-	await viewer.getByRole('button', { name: 'Use CV wording' }).waitFor();
+	await viewer.getByRole('button', { name: 'Edit', exact: true }).click();
+
+	await viewer.getByLabel('Name', { exact: true }).fill('Sam Q. Example');
+	await viewer.getByRole('button', { name: /Work Experience/ }).click();
+	await viewer.getByLabel('Section title').fill('Research');
+	await viewer.getByLabel('Dates').first().fill('Summer 2026');
+	await viewer.getByRole('button', { name: '+ Bullet' }).first().click();
+	await viewer.getByLabel('Bullet', { exact: true }).last().fill('Wrote this bullet by hand for the final version');
+	await expect(viewer.getByAltText('Live preview of your edits')).toBeVisible({ timeout: 30_000 });
+	await expect(viewer.getByText(/^1 page$/)).toBeVisible({ timeout: 30_000 });
+
 	await viewer.getByRole('button', { name: 'Save and re-render' }).click();
 	await expect(page.getByText('The PDF and Word files are updated')).toBeVisible({ timeout: 30_000 });
 	await expect(viewer.getByRole('heading', { name: 'Resume (edited by you)' })).toBeVisible();

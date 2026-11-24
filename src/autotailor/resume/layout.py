@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from autotailor.cv import Entry, MasterCV
 from autotailor.models import TailoredResume
 
@@ -83,7 +85,8 @@ def build_layout(r: TailoredResume, cv: MasterCV, entry_order: str = "cv", all_s
             "left1": ed.school, "right1": ed.location or "",
             "left2": f"{ed.degree} {ed.field}" if ed.field else ed.degree,
             "right2": _dates(ed.start, ed.graduation) if ed.start else (ed.graduation or ""),
-            "bullets": lines, "title": ed.degree, "organization": ed.school, "location": ed.location or "",
+            "bullets": lines, "title": f"{ed.degree} {ed.field}" if ed.field else ed.degree, "organization": ed.school,
+            "location": ed.location or "",
             "dates": _dates(ed.start, ed.graduation) if ed.start else (ed.graduation or ""), "stack": "",
             "stack_on": "left2",
         })  # fmt: skip
@@ -140,3 +143,85 @@ def contact_items(c) -> list[dict[str, str | None]]:  # noqa: ANN001
         url = link if "://" in link else f"https://{link}"
         out.append({"text": link.removeprefix("https://").removeprefix("http://"), "url": url})
     return out
+
+
+# --- the final editor ----------------------------------------------------------------------------
+# A layout as the resume editor edits it: plain fields per entry, in the user's words. normalize()
+# turns it back into a render-ready layout (the four corner fields the templates place).
+
+DEFAULT_TITLES = {"education": "Education", **dict(SECTIONS), "certifications": "Certifications"}
+
+
+class EditableItem(BaseModel):
+    title: str = ""
+    organization: str = ""
+    location: str = ""
+    dates: str = ""
+    stack: str = ""
+    bullets: list[str] = Field(default_factory=list)
+
+
+class EditableSection(BaseModel):
+    key: str = "custom"  # experience, projects, ... or "custom" for a section the user added
+    title: str
+    items: list[EditableItem] = Field(default_factory=list)
+
+
+class EditableContact(BaseModel):
+    text: str
+    url: str | None = None
+
+
+class EditableSkillGroup(BaseModel):
+    name: str
+    items: str
+
+
+class EditableLayout(BaseModel):
+    name: str
+    contact_items: list[EditableContact] = Field(default_factory=list)
+    sections: list[EditableSection] = Field(default_factory=list)
+    skills: list[EditableSkillGroup] = Field(default_factory=list)
+
+
+def normalize(e: EditableLayout) -> dict[str, Any]:
+    """A render-ready layout from an edited one: corner fields from the plain ones, empty
+    bullets, entries and sections dropped, and `renamed` set on sections whose title changed
+    (so a template keeps the user's title rather than its own)."""
+    sections = []
+    for s in e.sections:
+        items = []
+        for it in s.items:
+            f = {k: (getattr(it, k) or "").strip() for k in ("title", "organization", "location", "dates", "stack")}
+            bullets = [" ".join(b.split()) for b in it.bullets if b.strip()]
+            if not (f["title"] or f["organization"] or bullets):
+                continue
+            if s.key == "certifications":
+                corners = {"left1": f["title"], "right1": f["dates"], "left2": f["organization"], "right2": f["location"],
+                           "stack_on": "left1"}  # fmt: skip
+            elif f["organization"]:
+                corners = {"left1": f["organization"], "right1": f["location"], "left2": f["title"], "right2": f["dates"],
+                           "stack_on": "left2"}  # fmt: skip
+            else:
+                corners = {"left1": f["title"], "right1": f["dates"], "left2": "", "right2": f["location"], "stack_on": "left1"}
+            items.append({**f, **corners, "bullets": bullets})
+        title = s.title.strip() or DEFAULT_TITLES.get(s.key, "Section")
+        if items:
+            sections.append({"key": s.key, "title": title, "items": items,
+                             "renamed": title != DEFAULT_TITLES.get(s.key, title + " ")})  # fmt: skip
+    contact = [{"text": c.text.strip(), "url": (c.url or "").strip() or None} for c in e.contact_items if c.text.strip()]
+    skills = [{"name": g.name.strip(), "items": g.items.strip()} for g in e.skills if g.name.strip() and g.items.strip()]
+    return {"name": e.name.strip(), "contact": " | ".join(c["text"] for c in contact), "contact_items": contact,
+            "sections": sections, "skills": skills}  # fmt: skip
+
+
+def editable(layout: dict[str, Any]) -> dict[str, Any]:
+    """The editor's view of a render-ready layout (the reverse of normalize)."""
+    return EditableLayout(
+        name=layout.get("name", ""),
+        contact_items=[EditableContact(**c) for c in layout.get("contact_items", [])],
+        sections=[EditableSection(key=s.get("key", "custom"), title=s["title"], items=[
+            EditableItem(**{k: i.get(k, "") or "" for k in ("title", "organization", "location", "dates", "stack")},
+                         bullets=list(i.get("bullets", []))) for i in s["items"]]) for s in layout.get("sections", [])],
+        skills=[EditableSkillGroup(name=g["name"], items=g["items"]) for g in layout.get("skills", [])],
+    ).model_dump()  # fmt: skip

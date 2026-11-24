@@ -1656,7 +1656,9 @@ def ui(
     port: int = typer.Option(8501, "--port", "-p", help="Port for the web app on 127.0.0.1."),
     api_port: int = typer.Option(8765, "--api-port", help="Port for the local API on 127.0.0.1."),
     classic: bool = typer.Option(False, "--classic", help="The previous Streamlit UI instead."),
-    browser: bool = typer.Option(True, "--browser/--no-browser", help="Open the sign-in link in a browser."),
+    browser: bool = typer.Option(
+        False, "--browser/--no-browser", help="Also open the sign-in link in your default browser (off by default)."
+    ),
 ) -> None:
     """Open the local web app (and the API it uses). Ctrl-C stops both.
 

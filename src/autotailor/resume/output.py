@@ -76,6 +76,18 @@ class Style:
     def layout(self, r: TailoredResume, cv: MasterCV) -> dict:
         return build_layout(r, cv, self.entry_order, self.all_skills)
 
+    def render(self, layout: dict) -> bytes:
+        """The PDF for a layout with this style's template (Typst when LaTeX can't be used)."""
+        if self.template == "typst" or self.templates_dir is None or self.tools is None:
+            return render_pdf(layout)
+        return render_resume(layout, self.template, self.templates_dir, self.tools).pdf
+
+    def render_docx(self, layout: dict, path: Path) -> None:
+        if self.word_template and self.templates_dir is not None:
+            render_docx_template(layout, self.templates_dir / self.word_template, path)
+        else:
+            render_docx(layout, path)
+
 
 def write_outputs(
     root: Path,
@@ -208,3 +220,52 @@ def save_edit(folder: Path, pdf: Path, docx: Path, data: Path, resume: TailoredR
     })  # fmt: skip
     fit_file.write_text(json.dumps(fit, indent=1), encoding="utf-8")
     return Edited(fit["pages"], edit_warnings(resume, cv), coverage.score)
+
+
+EDITED_LAYOUT = "layout.edited.json"  # the final editor's version of the page, when there is one
+
+
+def layout_warnings(layout: dict, cv: MasterCV) -> list[str]:
+    """Notes on hand-written text: numbers, names or tools the CV doesn't have anywhere. Not
+    errors (the user knows what's true), but worth a look, and worth adding to the CV if right."""
+    from autotailor.resume.verify import _numbers, _terms, _vocabulary
+
+    every = [b.text for b in cv.bullets().values()]
+    for e in cv.entries():
+        every += [e.title, e.organization or "", e.location or "", e.start or "", e.end or "", " ".join(e.stack)]
+    for ed in cv.education:
+        every += [ed.school, ed.degree, ed.field or "", ed.location or "", ed.start or "", ed.graduation or "", ed.gpa or ""]
+    every += [s for g in cv.skills for s in [g.name, *g.items]]
+    c = cv.contact
+    every += [c.name, c.email or "", c.phone or "", c.location or "", *c.links]
+    source = "\n".join(every)
+    vocab, numbers = _vocabulary(source), _numbers(source)
+    out = []
+    for s in layout.get("sections", []):
+        for item in s.get("items", []):
+            for text in [*item.get("bullets", []), item.get("title", ""), item.get("organization", ""), item.get("stack", "")]:
+                new = sorted(_numbers(text) - numbers) + sorted(t for t in _terms(text) if t not in vocab)
+                if new:
+                    snippet = text if len(text) <= 60 else text[:57] + "..."
+                    out.append(f"“{snippet}”: {', '.join(new)} isn't in your CV. Fine if it's true; add it to your Master CV to reuse it.")
+    return out
+
+
+def save_layout_edit(folder: Path, pdf: Path, docx: Path, layout: dict, cv: MasterCV, style: Style,
+                     keywords: list[str], posting_text: str) -> Edited:  # fmt: skip
+    """Render the final editor's layout over the resume's files and keep it (EDITED_LAYOUT)."""
+    import json
+
+    from autotailor.resume.fill import keyword_coverage
+
+    pdf_bytes = style.render(layout)
+    pdf.write_bytes(pdf_bytes)
+    style.render_docx(layout, docx)
+    (folder / EDITED_LAYOUT).write_text(json.dumps(layout, indent=1, ensure_ascii=False), encoding="utf-8")
+    coverage = keyword_coverage(keywords, layout, posting_text)
+    fit_file = folder / "fit.json"
+    fit = json.loads(fit_file.read_text(encoding="utf-8")) if fit_file.exists() else {}
+    fit.update({"edited": True, "pages": pdf_page_count(pdf_bytes), "keyword_score": coverage.score,
+                "keywords_matched": coverage.matched, "keywords_missing": coverage.missing})  # fmt: skip
+    fit_file.write_text(json.dumps(fit, indent=1), encoding="utf-8")
+    return Edited(fit["pages"], layout_warnings(layout, cv), coverage.score)

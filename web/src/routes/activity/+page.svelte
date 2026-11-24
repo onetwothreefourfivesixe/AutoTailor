@@ -45,7 +45,7 @@
 		</ul>
 	{:else}
 		<div class="mb-3 flex flex-wrap items-center gap-3 text-sm">
-			<select class="input w-auto" aria-label="Step" value={data.step ?? ''} onchange={(e) => goto(e.currentTarget.value ? `/activity?step=${e.currentTarget.value}` : '/activity', { keepFocus: true, noScroll: true })}>
+			<select class="input w-auto" aria-label="Step" value={data.step ?? ''} onchange={(e) => goto(e.currentTarget.value ? `/activity?step=${e.currentTarget.value}` : '/activity', { reset: false })}>
 				<option value="">All steps</option>
 				{#each ['extract', 'score', 'tailor', 'humanize'] as s (s)}<option value={s}>{s}</option>{/each}
 			</select>

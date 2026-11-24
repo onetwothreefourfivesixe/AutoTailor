@@ -16,10 +16,10 @@
 
 	let tab = $state(page.url.searchParams.get('tab') ?? 'overview');
 	$effect(() => {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 		if ((url.searchParams.get('tab') ?? 'overview') !== tab) {
 			tab === 'overview' ? url.searchParams.delete('tab') : url.searchParams.set('tab', tab);
-			goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+			goto(url, { replace: true, reset: false });
 		}
 	});
 

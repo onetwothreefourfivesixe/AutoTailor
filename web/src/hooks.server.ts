@@ -1,4 +1,5 @@
-import { redirect, type Handle } from '@sveltejs/kit';
+import { redirect } from '@sveltejs/kit';
+import type { Handle } from '@sveltejs/kit/hooks';
 import { COOKIE, valid } from '$lib/server/session';
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);

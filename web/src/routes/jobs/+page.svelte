@@ -26,12 +26,12 @@
 	];
 
 	function setParams(changes: Record<string, string | null>, reset = false) {
-		const p = reset ? new URLSearchParams() : new URLSearchParams(page.url.searchParams);
+		const p = reset ? new URLSearchParams() : new URLSearchParams(page.url.search);
 		for (const [k, v] of Object.entries(changes)) v ? p.set(k, v) : p.delete(k);
 		if (!('page' in changes)) p.delete('page');
 		selected = new Set();
 		cursor = 0;
-		goto(`/jobs?${p}`, { keepFocus: true, noScroll: true, replaceState: true });
+		goto(`/jobs?${p}`, { reset: false, replace: true });
 	}
 
 	const viewActive = (params: Record<string, string>) => {

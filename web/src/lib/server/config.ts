@@ -1,4 +1,5 @@
-import { env } from '$env/dynamic/private';
+// Read at run time from the server's environment (set by `autotailor ui`); server-only module.
+const env = process.env;
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 

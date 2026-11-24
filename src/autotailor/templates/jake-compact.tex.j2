@@ -119,7 +119,7 @@
 
 ((* for section in sections *))
 %----------- ((( section.title|upper ))) -----------
-\section{((( headings.get(section.key, section.title) )))}
+\section{((( section.title if section.get("renamed") else headings.get(section.key, section.title) )))}
 ((* if section.key == "activities" *))
 \begin{itemize}[leftmargin=0.15in, label={}, itemsep=2pt, parsep=0pt, topsep=3pt]
   \small

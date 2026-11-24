@@ -54,7 +54,7 @@ uv sync                                   # install AutoTailor
 uv run autotailor ui
 ```
 
-That's it: the first time, AutoTailor creates its settings and database, then opens a **setup wizard** in your browser (it prints a one-time sign-in link; on WSL, copy it into a Windows browser). The wizard walks you through:
+That's it: the first time, AutoTailor creates its settings and database, then prints a one-time sign-in link: open it in your browser (on WSL, a Windows browser) to start the **setup wizard**. (`autotailor ui --browser` opens the link for you.) The wizard walks you through:
 
 1. **Where the AI runs**: on your computer with Ollama (free and private), in the cloud with an API key (it shows you how to get one, step by step, and saves it on your computer), or a mix.
 2. **Your CV**: drag in your current resume or CV (PDF, Word, text or Markdown). AutoTailor reads it, sorts it into sections, and shows you the result to check before saving. Any line the AI didn't copy word for word is flagged. Include everything you might ever put on a resume; AutoTailor picks the right parts for each job.
@@ -123,7 +123,7 @@ The run's `report.md` links everything and lists any job that couldn't be tailor
 2. **Your wording stays.** Bullets are copied as you wrote them; the AI may only swap in the posting's term for something a bullet already says ("data visualization" for "made charts"). A checker rejects any draft that rewrites a bullet in its own words, or adds tools, numbers or results your CV doesn't state, and the AI tries again. For word-for-word copies only, set Settings › Runs and limits › Bullet wording. If no draft passes, you get your usual resume, ordered and filled for the posting, with a note saying so.
 3. **The page is filled.** The rest of your usual resume goes in first, then your next most relevant CV bullets, word for word, until one more would spill onto a second page. A draft that runs over a page is trimmed from its least relevant end (your education lines stay). Turn this off under Settings › Runs and limits › "Fill the page".
 4. **Keyword match.** The job's Resume tab shows how many of the posting's key terms appear on the resume (80% or more is a strong match) and which are missing. If a missing one is true for you, add it to your CV and tailor again; AutoTailor never adds it for you.
-5. **Your final tweaks.** Click the resume on the job's Resume tab to see it full size, then **Edit** to reorder, remove or reword bullets, add bullets from your CV, or choose which skills come first. Saving re-renders the PDF and Word files for that job only (your Master CV doesn't change). If an edit adds a number or tool your CV doesn't have, you get a note, not an error. **Restore tailored version** undoes every edit.
+5. **Your final edits.** Click the resume on the job's Resume tab to see it full size, then **Edit** for a full editor of the page: your name and contact line; every section (rename, reorder, add your own, remove); every entry (title, organization, location, dates, tech stack); every bullet (reword it, write a new one, or insert one from your CV); and the skills. A live preview re-renders as you type and shows the page count. **Save** renders the PDF and Word files for that job only (your Master CV doesn't change); words or numbers your CV doesn't have get a note, not an error. **Restore tailored version** undoes every edit.
 
 ## Where jobs come from
 

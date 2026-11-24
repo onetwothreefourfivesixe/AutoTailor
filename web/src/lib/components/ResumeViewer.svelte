@@ -1,10 +1,12 @@
 <script lang="ts">
-	// A full-screen view of a tailored resume, with a panel for small hand edits: reorder,
-	// remove or reword bullets, add bullets from the CV, and pick the skills listed first.
-	// Saving renders the PDF and Word files again; the tailored version can be restored.
+	// The tailored resume full size, and a full editor for final changes: the header, every
+	// section (rename, reorder, add, remove), every entry (title, organization, place, dates, tech
+	// stack), every bullet (reword, write new ones, insert from the CV) and the skills. A live
+	// preview re-renders as you type; saving renders the PDF and Word files again, and the
+	// tailored version can always be restored.
 	import { send, ApiError } from '$lib/client/api';
 	import { toasts } from '$lib/client/live.svelte';
-	import type { ResumeView } from '$lib/types';
+	import type { EditableLayout, ResumeView } from '$lib/types';
 
 	let {
 		open = $bindable(false),
@@ -22,49 +24,82 @@
 	});
 
 	const enc = (s: string) => encodeURIComponent(s);
-	let zoom = $state(false); // false: fit the width of the view; true: actual size, scroll to read
+	let zoom = $state(false);
 	let editing = $state(false);
 	let saving = $state(false);
 	let warnings = $state<string[]>([]);
-
-	type Row = { source_id: string; text: string };
-	let rows = $state<Row[]>([]);
-	let skills = $state<string[]>([]);
-	let addBullet = $state('');
-	let addSkill = $state('');
+	let draft = $state<EditableLayout | null>(null);
+	let start = '';
+	const dirty = $derived(editing && draft !== null && JSON.stringify(draft) !== start);
 
 	function startEditing() {
-		rows = resume.bullets.map((b) => ({ source_id: b.source_id, text: b.tailored }));
-		skills = [...resume.skills];
+		if (!resume.layout) return toasts.show("This resume can't be edited (the master CV didn't load).", 'error');
+		draft = structuredClone($state.snapshot(resume.layout)) as EditableLayout;
+		start = JSON.stringify(draft);
 		warnings = [];
+		openPanels = new Set(['header']);
 		editing = true;
 	}
 
-	const entryOf = $derived(Object.fromEntries(resume.cv_bullets.map((b) => [b.id, b.entry])));
-	const unused = $derived(resume.cv_bullets.filter((b) => !rows.some((r) => r.source_id === b.id)));
-	const unusedByEntry = $derived(
-		unused.reduce<Record<string, typeof unused>>((acc, b) => ((acc[b.entry] ??= []).push(b), acc), {})
-	);
-	const allSkills = $derived(resume.cv_skills.flatMap((g) => g.items));
-	const original = (id: string) => resume.cv_bullets.find((b) => b.id === id)?.text;
-	const dirty = $derived(
-		editing &&
-			(JSON.stringify(rows) !== JSON.stringify(resume.bullets.map((b) => ({ source_id: b.source_id, text: b.tailored }))) ||
-				JSON.stringify(skills) !== JSON.stringify(resume.skills))
-	);
+	// --- live preview ------------------------------------------------------------------------------
+	let preview = $state<string | null>(null);
+	let previewPages = $state<number | null>(null);
+	let previewing = $state(false);
+	let previewError = $state<string | null>(null);
+	let seq = 0;
+	let timer: ReturnType<typeof setTimeout>;
+	$effect(() => {
+		if (!editing || !draft) return;
+		const body = JSON.stringify(draft); // tracks every field
+		clearTimeout(timer);
+		timer = setTimeout(() => render(body), 900);
+	});
+	async function render(body: string) {
+		const mine = ++seq;
+		previewing = true;
+		try {
+			const res = await fetch(`/api/jobs/${enc(postingId)}/resume/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+			if (mine !== seq) return;
+			if (!res.ok) {
+				previewError = (await res.json().catch(() => ({}))).detail ?? 'The preview failed.';
+				return;
+			}
+			const url = URL.createObjectURL(await res.blob());
+			if (preview) URL.revokeObjectURL(preview);
+			preview = url;
+			previewPages = Number(res.headers.get('x-pages'));
+			previewError = null;
+		} finally {
+			if (mine === seq) previewing = false;
+		}
+	}
 
-	function move(list: unknown[], i: number, by: number) {
+	// --- editing helpers ---------------------------------------------------------------------------
+	let openPanels = $state<Set<string>>(new Set(['header']));
+	const toggle = (id: string) => {
+		const s = new Set(openPanels);
+		s.has(id) ? s.delete(id) : s.add(id);
+		openPanels = s;
+	};
+	function move<T>(list: T[], i: number, by: number) {
 		const j = i + by;
 		if (j < 0 || j >= list.length) return;
 		list.splice(j, 0, ...list.splice(i, 1));
 	}
+	const blankItem = () => ({ title: '', organization: '', location: '', dates: '', stack: '', bullets: [''] });
+	const byEntry = $derived(
+		resume.cv_bullets.reduce<Record<string, typeof resume.cv_bullets>>((acc, b) => ((acc[b.entry] ??= []).push(b), acc), {})
+	);
+	const onPage = $derived(new Set(draft?.sections.flatMap((s) => s.items.flatMap((i) => i.bullets)) ?? []));
 
 	async function save() {
+		if (!draft) return;
 		saving = true;
 		try {
-			const r = await send<{ pages: number; warnings: string[] }>('PUT', `/jobs/${enc(postingId)}/resume`, { bullets: rows, skills });
+			const r = await send<{ pages: number; warnings: string[] }>('PUT', `/jobs/${enc(postingId)}/resume/layout`, draft);
 			warnings = r.warnings;
-			toasts.show(r.pages > 1 ? `Saved, but it now runs to ${r.pages} pages. Remove a bullet or two.` : 'Saved. The PDF and Word files are updated.', r.pages > 1 ? 'error' : undefined);
+			start = JSON.stringify(draft);
+			toasts.show(r.pages > 1 ? `Saved, but it runs to ${r.pages} pages.` : 'Saved. The PDF and Word files are updated.', r.pages > 1 ? 'error' : undefined);
 			onsaved();
 		} catch (e) {
 			toasts.show(e instanceof ApiError ? e.message : 'Saving failed.', 'error');
@@ -89,9 +124,13 @@
 		}
 	}
 
-	function close() {
-		if (dirty && !confirm('Discard your unsaved edits?')) return;
+	function stopEditing() {
+		if (dirty && !confirm('Discard your unsaved edits?')) return false;
 		editing = false;
+		return true;
+	}
+	function close() {
+		if (editing && !stopEditing()) return;
 		open = false;
 	}
 </script>
@@ -99,13 +138,18 @@
 <dialog
 	bind:this={dialog}
 	onclose={() => { editing = false; open = false; }}
-	oncancel={(e) => { if (dirty) { e.preventDefault(); close(); } }}
+	oncancel={(e) => { e.preventDefault(); close(); }}
 	class="m-auto h-[calc(100vh-2rem)] max-h-none w-[calc(100vw-2rem)] max-w-none rounded-xl border border-line bg-surface p-0 text-fg shadow-2xl backdrop:bg-black/60"
 	aria-label="Resume"
 >
 	<div class="flex h-full flex-col">
 		<div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
 			<h2 class="mr-auto font-semibold">Resume{resume.edited ? ' (edited by you)' : ''}</h2>
+			{#if editing}
+				<span class="text-sm {previewPages && previewPages > 1 ? 'font-medium text-danger' : 'text-muted'}" aria-live="polite">
+					{previewing ? 'Updating preview…' : previewError ? previewError : previewPages ? `${previewPages} page${previewPages > 1 ? 's' : ''}` : ''}
+				</span>
+			{/if}
 			<button class="btn btn-sm" onclick={() => (zoom = !zoom)} aria-pressed={zoom}>{zoom ? 'Fit to width' : 'Actual size'}</button>
 			{#if resume.pdf}<a class="btn btn-sm" href="/api/files/{resume.pdf}">PDF</a>{/if}
 			{#if resume.docx}<a class="btn btn-sm" href="/api/files/{resume.docx}">Word</a>{/if}
@@ -115,69 +159,121 @@
 		<div class="flex min-h-0 flex-1 flex-col lg:flex-row">
 			<div class="min-h-0 flex-1 overflow-auto bg-sunken p-4">
 				<img
-					src="/api/postings/{enc(postingId)}/resume.png?scale=2.6&v={version}"
-					alt="The tailored resume, full size"
-					class="mx-auto rounded border border-line bg-white shadow {zoom ? 'max-w-none' : 'w-full max-w-5xl'}"
+					src={editing && preview ? preview : `/api/postings/${enc(postingId)}/resume.png?scale=2.6&v=${version}`}
+					alt={editing ? 'Live preview of your edits' : 'The tailored resume, full size'}
+					class="mx-auto rounded border border-line bg-white shadow transition-opacity {zoom ? 'max-w-none' : 'w-full max-w-5xl'} {editing && previewing ? 'opacity-70' : ''}"
 				/>
 			</div>
-			{#if editing}
-				<aside class="flex min-h-0 flex-col border-t border-line lg:w-[30rem] lg:border-t-0 lg:border-l" aria-label="Edit the resume">
-					<div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm">
-						<p class="text-xs text-muted">Changes apply to this job's resume only; your Master CV stays as it is. A bullet higher in the list moves its job or project up. Saving keeps your choices as they are (no page filling).</p>
-						<ol class="space-y-3">
-							{#each rows as r, i (r.source_id)}
-								<li class="rounded-md border border-line p-2">
-									<div class="mb-1 flex items-center gap-1 text-xs text-muted">
-										<span class="mr-auto min-w-0 truncate" title={r.source_id}>{entryOf[r.source_id] ?? r.source_id}</span>
-										<button class="btn btn-sm" disabled={i === 0} onclick={() => move(rows, i, -1)} aria-label="Move up">↑</button>
-										<button class="btn btn-sm" disabled={i === rows.length - 1} onclick={() => move(rows, i, 1)} aria-label="Move down">↓</button>
-										<button class="btn btn-sm" onclick={() => rows.splice(i, 1)} aria-label="Remove bullet">✕</button>
-									</div>
-									<textarea class="input min-h-16 text-sm" bind:value={r.text} aria-label="Bullet text"></textarea>
-									{#if original(r.source_id) && r.text !== original(r.source_id)}
-										<div class="mt-1 flex items-start gap-2 text-xs text-muted">
-											<span class="min-w-0 flex-1">CV: {original(r.source_id)}</span>
-											<button class="text-accent hover:underline" onclick={() => (r.text = original(r.source_id) ?? r.text)}>Use CV wording</button>
+			{#if editing && draft}
+				<aside class="flex min-h-0 flex-col border-t border-line lg:w-[34rem] lg:border-t-0 lg:border-l" aria-label="Edit the resume">
+					<div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 text-sm">
+						<p class="text-xs text-muted">Everything on the page can be changed here, for this job only (your Master CV stays as it is). The preview updates as you type; nothing is saved until you press Save.</p>
+
+						<!-- header -->
+						<section class="rounded-lg border border-line">
+							<button class="flex w-full items-center justify-between px-3 py-2 font-medium" onclick={() => toggle('header')} aria-expanded={openPanels.has('header')}>Header <span class="text-muted">{openPanels.has('header') ? '▾' : '▸'}</span></button>
+							{#if openPanels.has('header')}
+								<div class="space-y-2 border-t border-line p-3">
+									<label class="block"><span class="label">Name</span><input class="input" bind:value={draft.name} /></label>
+									<span class="label">Contact line</span>
+									{#each draft.contact_items as c, i (i)}
+										<div class="flex gap-1">
+											<input class="input min-w-0 flex-1" bind:value={c.text} placeholder="Shown text" aria-label="Contact text" />
+											<input class="input min-w-0 flex-1" bind:value={c.url} placeholder="Link (optional)" aria-label="Contact link" />
+											<button class="btn btn-sm" onclick={() => move(draft!.contact_items, i, -1)} disabled={i === 0} aria-label="Move contact up">↑</button>
+											<button class="btn btn-sm" onclick={() => draft!.contact_items.splice(i, 1)} aria-label="Remove contact">✕</button>
 										</div>
-									{/if}
-								</li>
-							{/each}
-						</ol>
-						<label class="block">
-							<span class="label">Add a bullet from your CV</span>
-							<select class="input" bind:value={addBullet} onchange={() => { const b = unused.find((x) => x.id === addBullet); if (b) rows.push({ source_id: b.id, text: b.text }); addBullet = ''; }}>
-								<option value="">Choose…</option>
-								{#each Object.entries(unusedByEntry) as [entry, list] (entry)}
-									<optgroup label={entry}>
-										{#each list as b (b.id)}<option value={b.id}>{b.text.length > 90 ? b.text.slice(0, 90) + '…' : b.text}</option>{/each}
-									</optgroup>
-								{/each}
-							</select>
-						</label>
-						<div>
-							<span class="label">Skills listed first</span>
-							<div class="flex flex-wrap gap-1">
-								{#each skills as s, i (s)}
-									<span class="inline-flex items-center gap-1 rounded bg-sunken px-2 py-0.5">
-										<button class="text-muted" disabled={i === 0} onclick={() => move(skills, i, -1)} aria-label="Move {s} earlier">‹</button>
-										{s}
-										<button class="text-muted" onclick={() => skills.splice(i, 1)} aria-label="Remove {s}">✕</button>
-									</span>
-								{/each}
-							</div>
-							<select class="input mt-2" bind:value={addSkill} onchange={() => { if (addSkill) skills.push(addSkill); addSkill = ''; }} aria-label="Add a skill">
-								<option value="">Add a skill…</option>
-								{#each allSkills.filter((s) => !skills.includes(s)) as s (s)}<option value={s}>{s}</option>{/each}
-							</select>
-							<p class="mt-1 text-xs text-muted">Depending on Settings › Skills section, these come first in each group, or are the only ones shown.</p>
-						</div>
+									{/each}
+									<button class="btn btn-sm" onclick={() => draft!.contact_items.push({ text: '', url: null })}>+ Contact item</button>
+								</div>
+							{/if}
+						</section>
+
+						<!-- sections -->
+						{#each draft.sections as s, si (si)}
+							{@const id = `s${si}`}
+							<section class="rounded-lg border border-line">
+								<div class="flex items-center gap-1 px-3 py-2">
+									<button class="min-w-0 flex-1 truncate text-left font-medium" onclick={() => toggle(id)} aria-expanded={openPanels.has(id)}>{openPanels.has(id) ? '▾' : '▸'} {s.title || 'Untitled section'} <span class="text-xs font-normal text-muted">({s.items.length})</span></button>
+									<button class="btn btn-sm" onclick={() => move(draft!.sections, si, -1)} disabled={si === 0} aria-label="Move section up">↑</button>
+									<button class="btn btn-sm" onclick={() => move(draft!.sections, si, 1)} disabled={si === draft!.sections.length - 1} aria-label="Move section down">↓</button>
+									<button class="btn btn-sm" onclick={() => confirm(`Remove the whole “${s.title}” section?`) && draft!.sections.splice(si, 1)} aria-label="Remove section">✕</button>
+								</div>
+								{#if openPanels.has(id)}
+									<div class="space-y-3 border-t border-line p-3">
+										<label class="block"><span class="label">Section title</span><input class="input" bind:value={s.title} aria-label="Section title" /></label>
+										{#each s.items as it, ii (ii)}
+											<div class="rounded-md border border-line p-2">
+												<div class="mb-2 flex items-center gap-1 text-xs text-muted">
+													<span class="mr-auto truncate">{it.organization || it.title || 'New entry'}</span>
+													<button class="btn btn-sm" onclick={() => move(s.items, ii, -1)} disabled={ii === 0} aria-label="Move entry up">↑</button>
+													<button class="btn btn-sm" onclick={() => move(s.items, ii, 1)} disabled={ii === s.items.length - 1} aria-label="Move entry down">↓</button>
+													<button class="btn btn-sm" onclick={() => s.items.splice(ii, 1)} aria-label="Remove entry">✕</button>
+												</div>
+												<div class="grid gap-1.5 sm:grid-cols-2">
+													<input class="input" bind:value={it.title} placeholder={s.key === 'education' ? 'Degree' : 'Title or role'} aria-label="Title" />
+													<input class="input" bind:value={it.organization} placeholder={s.key === 'education' ? 'School' : 'Organization (optional)'} aria-label="Organization" />
+													<input class="input" bind:value={it.location} placeholder="Location (optional)" aria-label="Location" />
+													<input class="input" bind:value={it.dates} placeholder="Dates (optional)" aria-label="Dates" />
+													<input class="input sm:col-span-2" bind:value={it.stack} placeholder="Tech stack, shown after the title (optional)" aria-label="Tech stack" />
+												</div>
+												<ul class="mt-2 space-y-1.5">
+													{#each it.bullets as _, bi (bi)}
+														<li class="flex items-start gap-1">
+															<textarea class="input min-h-12 flex-1 text-sm" bind:value={it.bullets[bi]} aria-label="Bullet"></textarea>
+															<div class="flex flex-col gap-0.5">
+																<button class="btn btn-sm px-1.5 py-0" onclick={() => move(it.bullets, bi, -1)} disabled={bi === 0} aria-label="Move bullet up">↑</button>
+																<button class="btn btn-sm px-1.5 py-0" onclick={() => move(it.bullets, bi, 1)} disabled={bi === it.bullets.length - 1} aria-label="Move bullet down">↓</button>
+																<button class="btn btn-sm px-1.5 py-0" onclick={() => it.bullets.splice(bi, 1)} aria-label="Remove bullet">✕</button>
+															</div>
+														</li>
+													{/each}
+												</ul>
+												<div class="mt-1.5 flex flex-wrap gap-1.5">
+													<button class="btn btn-sm" onclick={() => it.bullets.push('')}>+ Bullet</button>
+													<select class="input w-auto max-w-full py-0.5 text-xs" aria-label="Insert a bullet from your CV" onchange={(e) => { const t = e.currentTarget.value; if (t) it.bullets.push(t); e.currentTarget.value = ''; }}>
+														<option value="">+ From your CV…</option>
+														{#each Object.entries(byEntry) as [entry, list] (entry)}
+															<optgroup label={entry}>
+																{#each list.filter((b) => !onPage.has(b.text)) as b (b.id)}<option value={b.text}>{b.text.length > 80 ? b.text.slice(0, 80) + '…' : b.text}</option>{/each}
+															</optgroup>
+														{/each}
+													</select>
+												</div>
+											</div>
+										{/each}
+										<button class="btn btn-sm" onclick={() => s.items.push(blankItem())}>+ Entry</button>
+									</div>
+								{/if}
+							</section>
+						{/each}
+						<button class="btn btn-sm" onclick={() => { draft!.sections.push({ key: 'custom', title: 'New section', items: [blankItem()] }); openPanels = new Set([...openPanels, `s${draft!.sections.length - 1}`]); }}>+ Section</button>
+
+						<!-- skills -->
+						<section class="rounded-lg border border-line">
+							<button class="flex w-full items-center justify-between px-3 py-2 font-medium" onclick={() => toggle('skills')} aria-expanded={openPanels.has('skills')}>Skills <span class="text-muted">{openPanels.has('skills') ? '▾' : '▸'}</span></button>
+							{#if openPanels.has('skills')}
+								<div class="space-y-1.5 border-t border-line p-3">
+									{#each draft.skills as g, gi (gi)}
+										<div class="flex gap-1">
+											<input class="input w-36 shrink-0" bind:value={g.name} placeholder="Group" aria-label="Skill group name" />
+											<input class="input min-w-0 flex-1" bind:value={g.items} placeholder="Python, SQL, …" aria-label="Skills in this group" />
+											<button class="btn btn-sm" onclick={() => move(draft!.skills, gi, -1)} disabled={gi === 0} aria-label="Move group up">↑</button>
+											<button class="btn btn-sm" onclick={() => draft!.skills.splice(gi, 1)} aria-label="Remove group">✕</button>
+										</div>
+									{/each}
+									<button class="btn btn-sm" onclick={() => draft!.skills.push({ name: '', items: '' })}>+ Group</button>
+								</div>
+							{/if}
+						</section>
+
 						{#if warnings.length}
-							<ul class="list-disc space-y-1 rounded-md bg-sunken p-3 pl-6 text-xs text-warn">{#each warnings as w (w)}<li>{w}</li>{/each}</ul>
+							<ul class="list-disc space-y-1 rounded-md bg-sunken p-3 pl-6 text-xs text-warn" aria-label="Notes on your edits">{#each warnings as w (w)}<li>{w}</li>{/each}</ul>
 						{/if}
 					</div>
 					<div class="flex flex-wrap items-center gap-2 border-t border-line p-3">
-						<button class="btn btn-primary" disabled={saving || !dirty || !rows.length} onclick={save}>{saving ? 'Saving…' : 'Save and re-render'}</button>
-						<button class="btn" disabled={saving} onclick={() => { if (!dirty || confirm('Discard your unsaved edits?')) editing = false; }}>Cancel</button>
+						<button class="btn btn-primary" disabled={saving || !dirty} onclick={save}>{saving ? 'Saving…' : 'Save and re-render'}</button>
+						<button class="btn" disabled={saving} onclick={stopEditing}>{dirty ? 'Discard' : 'Done'}</button>
 						{#if resume.edited}<button class="btn ml-auto" disabled={saving} onclick={restore}>Restore tailored version</button>{/if}
 					</div>
 				</aside>
