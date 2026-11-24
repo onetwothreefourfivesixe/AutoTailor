@@ -275,6 +275,55 @@ def discover(
 
 
 @app.command()
+def ats(
+    posting_id: str = typer.Argument(..., help="The posting whose tailored resume to change."),
+    terms: list[str] = typer.Argument(..., help='Keywords to add, each once, e.g. "ETL" "data pipelines".'),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the changes without saving them."),
+) -> None:
+    """Add ATS keywords to a tailored resume, each exactly once: the `tailor` step's model works
+    each into the one bullet that involves it, or into the skills, and every change is checked.
+
+    Only add keywords that are true for you. The PDF and Word files are rendered again (undo with
+    "Restore tailored version" on the job's Resume tab).
+    """
+    from autotailor.cv import load_master_cv
+    from autotailor.models import ArtifactKind, TailoredResume
+    from autotailor.resume.keywords import add_keywords
+    from autotailor.resume.output import Style, current_layout, save_layout_edit
+
+    settings, paths = _settings(), get_paths()
+    conn = db.connect(paths.db)
+    p = db.get_posting(conn, posting_id)
+    arts = db.artifacts_for(conn, posting_id)
+    conn.close()
+    data = next((a for a in arts if a["kind"] == ArtifactKind.RESUME_DATA.value), None)
+    if p is None or data is None:
+        _fail(f"No tailored resume for {posting_id}. Tailor it first: `autotailor tailor {posting_id}`.")
+        return
+    files = {a["kind"]: paths.outputs / a["path"] for a in arts if a["run_id"] == data["run_id"]}
+    data_path = paths.outputs / data["path"]
+    resume = TailoredResume.model_validate_json(data_path.read_text(encoding="utf-8"))
+    cv = load_master_cv(paths.master_cv)
+    style = Style.from_settings(settings, paths)
+    posting = f"{p.title}\n{p.description or ''}"
+    typer.echo(f"Adding {len(terms)} keyword(s) with {describe(settings.models.for_step('tailor'))} ...", err=True)
+    r = add_keywords(current_layout(data_path.parent, resume, cv, style), terms, posting, settings)
+    for c in r.changes:
+        typer.secho(f"+ {c.term}  ({c.where})", fg=typer.colors.GREEN)
+        typer.echo(f"    before: {c.before}\n    after:  {c.after}")
+        if c.note:
+            typer.echo(f"    {c.note}")
+    for s in r.skipped:
+        typer.echo(f"= {s['term']}: {s['reason']}")
+    if dry_run or not r.changes:
+        return
+    out = save_layout_edit(data_path.parent, files[ArtifactKind.RESUME_PDF.value], files[ArtifactKind.RESUME_DOCX.value],
+                           r.layout, cv, style, resume.keywords, posting)  # fmt: skip
+    score = f", keyword match {round(out.keyword_score * 100)}%" if out.keyword_score is not None else ""
+    typer.echo(f"Saved: {out.pages} page(s){score}.")
+
+
+@app.command()
 def prune() -> None:
     """Delete postings below the fit cut-off and ones older than sources.max_age_days, then
     shrink the database file. Runs on its own after every fetch and rank."""

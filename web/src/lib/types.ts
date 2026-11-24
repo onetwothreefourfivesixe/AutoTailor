@@ -132,6 +132,12 @@ export interface EditableLayout {
 	skills: { name: string; items: string }[];
 }
 
+export interface KeywordProposal {
+	layout: EditableLayout;
+	changes: { term: string; where: string; before: string; after: string; note: string }[];
+	skipped: { term: string; reason: string }[];
+}
+
 export interface ResumeView {
 	edited: boolean;
 	layout: EditableLayout | null;

@@ -43,6 +43,11 @@ class ResumeEditIn(BaseModel):
     skills: list[str] = []
 
 
+class KeywordsIn(BaseModel):
+    terms: list[str]
+    layout: EditableLayout | None = None  # the editor's unsaved page; else the saved one
+
+
 class HiddenIn(BaseModel):
     hidden: bool
 
@@ -370,6 +375,35 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         except Exception as e:  # LaTeX errors in a custom template
             raise HTTPException(422, f"Couldn't render the resume: {e}") from e
         return {"pages": out.pages, "warnings": out.warnings, "keyword_score": out.keyword_score}
+
+    @app.post("/api/jobs/{posting_id}/resume/keywords")
+    def add_resume_keywords(posting_id: str, body: KeywordsIn, request: Request, conn=Depends(_conn),  # noqa: ANN001
+                            settings: Settings = Depends(_settings)) -> dict:  # fmt: skip
+        """Propose the page with each chosen keyword added once by the model (checked; nothing saved):
+        the editor opens with it for review."""
+        from dataclasses import asdict
+
+        from autotailor.cv import load_master_cv
+        from autotailor.resume.keywords import add_keywords
+        from autotailor.resume.layout import editable, normalize
+        from autotailor.resume.output import Style, current_layout
+
+        terms = [t for t in body.terms if t.strip()]
+        if not terms:
+            raise HTTPException(422, "Pick at least one keyword.")
+        p = _need(db.get_posting(conn, posting_id), f"posting {posting_id}")
+        f = _resume_files(conn, request, posting_id)
+        if body.layout is not None:
+            page = normalize(body.layout)
+        else:
+            resume = TailoredResume.model_validate_json(f["data"].read_text(encoding="utf-8"))
+            page = current_layout(f["folder"], resume, load_master_cv(_paths(request).master_cv),
+                                  Style.from_settings(settings, _paths(request)))  # fmt: skip
+        try:
+            r = add_keywords(page, terms, f"{p.title}\n{p.description or ''}", settings)
+        except Exception as e:  # model unavailable, missing key, invalid output
+            raise HTTPException(502, f"The model couldn't add them: {type(e).__name__}: {e}") from e
+        return {"layout": editable(r.layout), "changes": [asdict(c) for c in r.changes], "skipped": r.skipped}
 
     @app.post("/api/jobs/{posting_id}/resume/restore")
     def restore_resume(posting_id: str, request: Request, conn=Depends(_conn),  # noqa: ANN001

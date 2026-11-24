@@ -156,3 +156,17 @@ test('command line: run a command and see its output; jobs can be fit-scored', a
 	await open(page, '/jobs/lever%3Ae2e-a');
 	await expect(page.getByRole('button', { name: /Score fit/ })).toBeEnabled();
 });
+
+test('ATS keywords: pick missing ones (or type one) to add with the AI', async ({ page }) => {
+	await open(page, '/jobs/lever%3Ae2e-a?tab=resume');
+	const missing = page.getByRole('group', { name: 'Missing keywords' });
+	await expect(missing.getByRole('button', { name: 'Robotics' })).toBeVisible();
+	const add = page.getByRole('button', { name: /with AI/ });
+	await expect(add).toBeDisabled();
+	await missing.getByRole('button', { name: 'Robotics' }).click();
+	await expect(missing.getByRole('button', { name: 'Robotics' })).toHaveAttribute('aria-pressed', 'true');
+	await page.getByLabel('Another keyword').fill('Docker');
+	await page.keyboard.press('Enter');
+	await expect(add).toHaveText('Add 2 with AI');
+	await expect(add).toBeEnabled();
+});

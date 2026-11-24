@@ -59,7 +59,8 @@ def main() -> None:
     run_id = db.start_run(conn, "{}")
     outputs = home / "data" / "outputs"
     w = write_outputs(outputs / "e2e-run", 1, db.get_posting(conn, "lever:e2e-a"), None,
-                      _verbatim("exp-lab-detector", "proj-ocr"), CV, style=Style("typst", fill_page=False))  # fmt: skip
+                      _verbatim("exp-lab-detector", "proj-ocr").model_copy(update={"keywords": ["PyTorch", "Perception", "Robotics"]}),
+                      CV, style=Style("typst", fill_page=False))  # fmt: skip
     for kind, path in (("resume_pdf", w.pdf), ("resume_docx", w.docx), ("resume_data", w.data)):
         db.add_artifact(conn, run_id, "lever:e2e-a", kind, str(path.relative_to(outputs)), "test")
     conn.commit()

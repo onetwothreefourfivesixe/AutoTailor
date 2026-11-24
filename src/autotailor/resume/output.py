@@ -269,3 +269,13 @@ def save_layout_edit(folder: Path, pdf: Path, docx: Path, layout: dict, cv: Mast
                 "keywords_matched": coverage.matched, "keywords_missing": coverage.missing})  # fmt: skip
     fit_file.write_text(json.dumps(fit, indent=1), encoding="utf-8")
     return Edited(fit["pages"], layout_warnings(layout, cv), coverage.score)
+
+
+def current_layout(folder: Path, resume: TailoredResume, cv: MasterCV, style: Style) -> dict:
+    """The page as it is now: the final editor's saved version if there is one, else the tailored one."""
+    import json
+
+    edited = folder / EDITED_LAYOUT
+    if edited.exists():
+        return json.loads(edited.read_text(encoding="utf-8"))
+    return style.layout(resume, cv)

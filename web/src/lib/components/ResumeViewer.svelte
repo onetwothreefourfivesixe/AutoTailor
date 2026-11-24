@@ -6,15 +6,29 @@
 	// tailored version can always be restored.
 	import { send, ApiError } from '$lib/client/api';
 	import { toasts } from '$lib/client/live.svelte';
-	import type { EditableLayout, ResumeView } from '$lib/types';
+	import type { EditableLayout, KeywordProposal, ResumeView } from '$lib/types';
 
 	let {
 		open = $bindable(false),
+		proposal = $bindable(null),
 		postingId,
 		resume,
 		version,
 		onsaved
-	}: { open?: boolean; postingId: string; resume: ResumeView; version: number; onsaved: () => void } = $props();
+	}: { open?: boolean; proposal?: KeywordProposal | null; postingId: string; resume: ResumeView; version: number; onsaved: () => void } = $props();
+
+	// Keywords the AI added (from the Resume tab): opened in the editor for review, unsaved.
+	let changes = $state<KeywordProposal['changes']>([]);
+	let skipped = $state<KeywordProposal['skipped']>([]);
+	$effect(() => {
+		if (!open || !proposal) return;
+		const pr = proposal;
+		proposal = null;
+		startEditing(pr.layout);
+		changes = pr.changes;
+		skipped = pr.skipped;
+		start = JSON.stringify(resume.layout); // so the proposal counts as unsaved
+	});
 
 	let dialog: HTMLDialogElement | undefined = $state();
 	$effect(() => {
@@ -32,11 +46,13 @@
 	let start = '';
 	const dirty = $derived(editing && draft !== null && JSON.stringify(draft) !== start);
 
-	function startEditing() {
+	function startEditing(from?: EditableLayout) {
 		if (!resume.layout) return toasts.show("This resume can't be edited (the master CV didn't load).", 'error');
-		draft = structuredClone($state.snapshot(resume.layout)) as EditableLayout;
+		draft = structuredClone($state.snapshot(from ?? resume.layout)) as EditableLayout;
 		start = JSON.stringify(draft);
 		warnings = [];
+		changes = [];
+		skipped = [];
 		openPanels = new Set(['header']);
 		editing = true;
 	}
@@ -153,7 +169,7 @@
 			<button class="btn btn-sm" onclick={() => (zoom = !zoom)} aria-pressed={zoom}>{zoom ? 'Fit to width' : 'Actual size'}</button>
 			{#if resume.pdf}<a class="btn btn-sm" href="/api/files/{resume.pdf}">PDF</a>{/if}
 			{#if resume.docx}<a class="btn btn-sm" href="/api/files/{resume.docx}">Word</a>{/if}
-			{#if !editing}<button class="btn btn-sm btn-primary" onclick={startEditing}>Edit</button>{/if}
+			{#if !editing}<button class="btn btn-sm btn-primary" onclick={() => startEditing()}>Edit</button>{/if}
 			<button class="btn btn-sm" onclick={close} aria-label="Close">Esc</button>
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -168,6 +184,22 @@
 				<aside class="flex min-h-0 flex-col border-t border-line lg:w-[34rem] lg:border-t-0 lg:border-l" aria-label="Edit the resume">
 					<div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 text-sm">
 						<p class="text-xs text-muted">Everything on the page can be changed here, for this job only (your Master CV stays as it is). The preview updates as you type; nothing is saved until you press Save.</p>
+						{#if changes.length || skipped.length}
+							<section class="rounded-lg border border-accent p-3" aria-label="Keyword changes">
+								<h3 class="mb-1 font-medium">Keyword changes: review, then save</h3>
+								<ul class="space-y-2">
+									{#each changes as c (c.term)}
+										<li>
+											<span class="rounded bg-accent px-1.5 text-xs text-white">{c.term}</span> <span class="text-xs text-muted">{c.where}</span>
+											<div class="mt-0.5 text-xs"><span class="text-muted line-through">{c.before || '(empty)'}</span></div>
+											<div class="text-xs">{c.after}</div>
+											{#if c.note}<div class="text-xs text-warn">{c.note}</div>{/if}
+										</li>
+									{/each}
+									{#each skipped as s (s.term)}<li class="text-xs text-muted"><b>{s.term}</b>: {s.reason}</li>{/each}
+								</ul>
+							</section>
+						{/if}
 
 						<!-- header -->
 						<section class="rounded-lg border border-line">

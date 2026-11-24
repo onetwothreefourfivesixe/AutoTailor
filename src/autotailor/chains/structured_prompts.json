@@ -231,5 +231,22 @@
       "Choose every industry from the list that the description covers, and only those. A broad description can cover several (for example, \"healthcare\" covers biotech, diagnostics, medical devices and digital health)."
     ],
     "human": "Industries: {industries}\n\nDescription: {interests}"
+  },
+  "add_keywords": {
+    "system": [
+      "You add keywords from a job posting to a finished resume so an applicant-tracking system finds them. The candidate chose these keywords because they are true for them.",
+      "Place each keyword exactly once, in one place:",
+      "- In a bullet (target 'B' and its number) when that bullet's experience clearly involves the keyword. Rewrite the whole bullet so it contains the keyword once (its exact words, singular or plural as the sentence needs, so it stays grammatical), changing as few words as possible. Keep every fact, number, name and tool it already has, and add nothing else: no new numbers, results, tools or claims.",
+      "- Otherwise in the skills group it fits best (target 'S' and its number), and leave the text empty. Tools, languages and frameworks usually belong in skills unless a bullet already describes using them.",
+      "Put at most one keyword into any one bullet, and keep the resume's wording and tone. Use each keyword's exact spelling."
+    ],
+    "human": "Keywords to add (each exactly once):\n{terms}\n\nResume bullets:\n{bullets}\n\nSkills groups:\n{skills}\n\nJob posting (for context):\n{posting}"
+  },
+  "insert_keyword": {
+    "system": [
+      "You add one keyword to one resume bullet. The candidate chose the keyword because it describes this work.",
+      "Return the whole bullet with the keyword worked in exactly once. Use its exact words, in the singular or plural form the sentence needs (\"data pipelines\" can read \"a data pipeline\"). Change as few words as possible: often it replaces a general word (\"pipeline\" becomes \"data pipeline\", \"backend\" becomes \"RAG backend\") or fits in a short phrase. The sentence must stay grammatical. Keep every fact, number, name and tool; add nothing else."
+    ],
+    "human": "Keyword: {term}\n\nBullet: {bullet}"
   }
 }

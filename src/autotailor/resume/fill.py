@@ -51,13 +51,26 @@ def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9][a-z0-9+#.\-]*[a-z0-9+#]|[a-z0-9]", text.lower()) if len(w) > 2 and w not in _STOP}
 
 
-def _has_phrase(text: str, phrase: str) -> bool:
-    """Whole-word, case-insensitive; punctuation and hyphens between words are ignored."""
-    words = [re.escape(w) for w in re.findall(r"[a-z0-9+#.]+", phrase.lower())]
+def _word_pattern(w: str) -> str:
+    """A word, also matching its plural or singular ("pipeline"/"pipelines"), as ATS matching does."""
+    if len(w) <= 3 or not w.isalpha():
+        return re.escape(w)
+    stem = w[:-1] if w.endswith("s") and not w.endswith("ss") else w
+    return re.escape(stem) + "s?"
+
+
+def _phrase_pattern(phrase: str) -> str | None:
+    words = [_word_pattern(w) for w in re.findall(r"[a-z0-9+#.]+", phrase.lower())]
     if not words:
-        return False
-    pattern = r"(?<![a-z0-9])" + r"[\s\-/,.]*".join(words) + r"(?![a-z0-9])"
-    return re.search(pattern, text.lower()) is not None
+        return None
+    return r"(?<![a-z0-9])" + r"[\s\-/,.]*".join(words) + r"(?![a-z0-9])"
+
+
+def _has_phrase(text: str, phrase: str) -> bool:
+    """Whole-word, case-insensitive; punctuation and hyphens between words are ignored, and a
+    word's singular or plural counts."""
+    pattern = _phrase_pattern(phrase)
+    return pattern is not None and re.search(pattern, text.lower()) is not None
 
 
 # --- which bullets to add -------------------------------------------------------------

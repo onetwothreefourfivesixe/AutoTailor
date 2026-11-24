@@ -4,7 +4,7 @@
 	import { get, send, ApiError } from '$lib/client/api';
 	import { toasts } from '$lib/client/live.svelte';
 	import { date, pct, when, words } from '$lib/format';
-	import { APP_LABELS, APP_STATUSES, type AiCall, type ResumeView, type Question } from '$lib/types';
+	import { APP_LABELS, APP_STATUSES, type AiCall, type KeywordProposal, type ResumeView, type Question } from '$lib/types';
 	import Tabs from '$lib/components/Tabs.svelte';
 	import VerdictPill from '$lib/components/VerdictPill.svelte';
 	import ResumeViewer from '$lib/components/ResumeViewer.svelte';
@@ -52,6 +52,27 @@
 	let resume = $state<ResumeView | null | undefined>(undefined);
 	let draft = $state(0);
 	let viewing = $state(false);
+	// --- adding ATS keywords with the AI
+	let pickedTerms = $state<Set<string>>(new Set());
+	let extraTerm = $state('');
+	let addingTerms = $state(false);
+	let proposal = $state<KeywordProposal | null>(null);
+	function togglePicked(k: string) {
+		const s = new Set(pickedTerms);
+		s.has(k) ? s.delete(k) : s.add(k);
+		pickedTerms = s;
+	}
+	async function addTerms() {
+		addingTerms = true;
+		try {
+			proposal = await send<KeywordProposal>('POST', `/jobs/${enc(p.id)}/resume/keywords`, { terms: [...pickedTerms] });
+			viewing = true;
+		} catch (e) {
+			toasts.show(e instanceof ApiError ? e.message : 'That failed.', 'error');
+		} finally {
+			addingTerms = false;
+		}
+	}
 	let version = $state(0); // bumped after an edit so the preview images reload
 	function loadResume() {
 		return get<ResumeView>(`/jobs/${enc(p.id)}/resume`).then((r) => {
@@ -231,7 +252,7 @@
 						<img src="/api/postings/{enc(p.id)}/resume.png?v={version}" alt="The tailored resume" class="w-full rounded-lg border border-line bg-white shadow-sm" />
 						<span class="absolute right-2 bottom-2 rounded bg-black/70 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">Click to enlarge or edit</span>
 					</button>
-					<ResumeViewer bind:open={viewing} postingId={p.id} {resume} {version} onsaved={() => { version += 1; loadResume(); }} />
+					<ResumeViewer bind:open={viewing} bind:proposal postingId={p.id} {resume} {version} onsaved={() => { version += 1; pickedTerms = new Set(); loadResume(); }} />
 					<div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
 						<button class="btn btn-sm" onclick={() => (viewing = true)}>Enlarge / edit</button>
 						{#if resume.pdf}<a class="btn btn-sm" href="/api/files/{resume.pdf}">Download PDF</a>{/if}
@@ -249,9 +270,23 @@
 							<p class="mb-2 text-xs text-muted">How many of the posting's key terms appear on the resume. Applicant-tracking systems look for these; 80% or more is a strong match.</p>
 							{#if resume.keywords_matched.length}<p class="text-sm"><span class="text-muted">On the resume:</span> {resume.keywords_matched.join(', ')}</p>{/if}
 							{#if resume.keywords_missing.length}
-								<p class="mt-1 text-sm"><span class="text-muted">Missing:</span> {resume.keywords_missing.join(', ')}</p>
-								<p class="mt-1 text-xs text-muted">If one of these is true for you, add it to your <a class="text-accent hover:underline" href="/cv">Master CV</a> and tailor again. AutoTailor won't add it on its own.</p>
+								<p class="mt-2 text-sm text-muted">Missing: click the ones that are true for you, and the AI works each into your resume once.</p>
+								<div class="mt-1.5 flex flex-wrap gap-1.5" role="group" aria-label="Missing keywords">
+									{#each resume.keywords_missing as k (k)}
+										<button class="rounded-full border px-2.5 py-0.5 text-sm {pickedTerms.has(k) ? 'border-accent bg-accent text-white' : 'border-line hover:bg-sunken'}" aria-pressed={pickedTerms.has(k)} onclick={() => togglePicked(k)}>{k}</button>
+									{/each}
+								</div>
 							{/if}
+							<form class="mt-2 flex flex-wrap items-center gap-2" onsubmit={(e) => { e.preventDefault(); if (extraTerm.trim()) { togglePicked(extraTerm.trim()); extraTerm = ''; } }}>
+								<input class="input w-48 py-1 text-sm" bind:value={extraTerm} placeholder="Another keyword" aria-label="Another keyword" />
+								{#each [...pickedTerms].filter((k) => !resume!.keywords_missing.includes(k)) as k (k)}
+									<button type="button" class="rounded-full border border-accent bg-accent px-2.5 py-0.5 text-sm text-white" aria-pressed="true" onclick={() => togglePicked(k)}>{k} ✕</button>
+								{/each}
+							</form>
+							<div class="mt-3 flex flex-wrap items-center gap-2">
+								<button class="btn btn-primary btn-sm" disabled={!pickedTerms.size || addingTerms} onclick={addTerms}>{addingTerms ? 'Revising…' : `Add ${pickedTerms.size || ''} with AI`}</button>
+								<span class="text-xs text-muted">Each goes in once: into the bullet that involves it, or your skills. You review the result before saving.</span>
+							</div>
 						</section>
 					{/if}
 					<section class="card p-4">

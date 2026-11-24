@@ -70,7 +70,7 @@ LABELS = {
 # and flags added so the command never waits for keyboard input (the worker has none).
 ALLOWED: dict[str, dict[str | None, list[str]]] = {
     "fetch": {None: []}, "add": {None: []}, "screen": {None: []}, "rank": {None: []},
-    "shortlist": {None: []}, "tailor": {None: []}, "prune": {None: []}, "discover": {None: []}, "resume": {None: []}, "runs": {None: []}, "run": {None: []},
+    "shortlist": {None: []}, "tailor": {None: []}, "prune": {None: []}, "discover": {None: []}, "ats": {None: []}, "resume": {None: []}, "runs": {None: []}, "run": {None: []},
     "models": {None: []}, "doctor": {None: []}, "compare": {None: []},
     "jobs": {"list": [], "show": []},
     "runway": {"list": [], "resolve": ["--auto"], "answer": []},
