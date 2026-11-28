@@ -93,12 +93,30 @@ def fix_article(text: str, term: str) -> str:
     return re.sub(rf"(\b(?:a|an)\s+(?:[\w-]+\s+){{0,2}}{head})s\b", r"\1", text, flags=re.I)
 
 
+# Words a bullet may gain besides the keyword's own: they connect it ("using X", "with X").
+SMALL_WORDS = {"a", "an", "the", "and", "or", "of", "for", "with", "using", "via", "in", "on", "to", "by", "through",
+               "including", "into", "as"}  # fmt: skip
+
+
+def _plain(text: str) -> list[str]:
+    """Words, lowercased, with a plural's "s" dropped (so "pipelines" and "pipeline" compare equal)."""
+    words = re.findall(r"[a-z0-9+#]+", text.lower())
+    return [w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in words]
+
+
 def check_bullet(before: str, after: str, term: str) -> str | None:
     """Why a reworded bullet can't be used, or None if it can."""
     if not _has_phrase(after, term):
         return "the rewrite didn't include the term"
     if len(re.findall(_phrase_pattern(term) or "$^", after.lower())) > 1:
         return "the rewrite used the term more than once"
+    known = set(_plain(before)) | set(_plain(term))
+    gained = [w for w in _plain(after) if w not in known]
+    content = sorted({w for w in gained if w not in SMALL_WORDS and not w.isdigit()})  # numbers: checked below
+    if content:
+        return f"the rewrite added words beyond the keyword ({', '.join(content)})"
+    if len(gained) > 3:
+        return "the rewrite added too many words"
     if similarity(after, before) < MIN_SIMILARITY:
         return "the rewrite changed the bullet too much"
     if len(after) > len(before) + len(term) + MAX_GROWTH:

@@ -45,6 +45,45 @@
 		timer = setTimeout(() => setParams({ q: search.trim() || null }), 250);
 	}
 
+	// --- sorting by column: click a heading to sort, again to reverse --------------------------------
+	const DEFAULT_DIR: Record<string, 'asc' | 'desc'> = { fit: 'desc', verdict: 'asc', title: 'asc', company: 'asc', location: 'asc', source: 'asc', posted: 'desc', progress: 'desc' };
+	const sortKey = $derived(page.url.searchParams.get('sort') ?? 'fit');
+	const sortDir = $derived((page.url.searchParams.get('dir') as 'asc' | 'desc' | null) ?? DEFAULT_DIR[sortKey] ?? 'desc');
+	function sortBy(key: string) {
+		if (key === sortKey) setParams({ sort: key, dir: sortDir === 'asc' ? 'desc' : 'asc' });
+		else setParams({ sort: key, dir: null }); // a new column starts in its usual direction
+	}
+	const ariaSort = (key: string) => (key === sortKey ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
+
+	// --- what's filtered, in words, each removable -------------------------------------------------
+	const filters = $derived.by(() => {
+		const q = page.url.searchParams;
+		const out: { label: string; clear: Record<string, null> }[] = [];
+		const view = views.find((v) => v.label !== 'All' && viewActive(v.params));
+		if (view) out.push({ label: view.label, clear: { verdict: null, has_resume: null, applied: null, hidden: null, cut: null } });
+		if (q.get('q')) out.push({ label: `“${q.get('q')}”`, clear: { q: null } });
+		if (q.get('source')) out.push({ label: `from ${q.get('source')}`, clear: { source: null } });
+		if (q.get('min_fit')) out.push({ label: `fit ≥ ${q.get('min_fit')}`, clear: { min_fit: null } });
+		return out;
+	});
+	function clearFilter(changes: Record<string, null>) {
+		if ('q' in changes) search = '';
+		setParams(changes);
+	}
+
+	// --- selecting: Shift-click a checkbox to select (or clear) the whole range since the last one --
+	let lastClicked = -1;
+	function check(e: MouseEvent, i: number, id: string) {
+		if (e.shiftKey && lastClicked >= 0 && lastClicked !== i) {
+			e.preventDefault(); // the range is set below; a plain click toggles the box as usual
+			const on = !selected.has(id);
+			const s = new Set(selected);
+			for (let k = Math.min(lastClicked, i); k <= Math.max(lastClicked, i); k++) on ? s.add(data.rows[k].id) : s.delete(data.rows[k].id);
+			selected = s;
+		} else toggle(id);
+		lastClicked = i;
+	}
+
 	function toggle(id: string) {
 		const s = new Set(selected);
 		s.has(id) ? s.delete(id) : s.add(id);
@@ -98,14 +137,14 @@
 <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
 	<h1 class="h1">Jobs <span class="text-base font-normal text-muted">{data.total}</span></h1>
 	<p class="hidden text-xs text-muted lg:block">
-		<kbd>j</kbd>/<kbd>k</kbd> move · <kbd>Enter</kbd> open · <kbd>x</kbd> select · <kbd>e</kbd>/<kbd>i</kbd> eligible/ineligible ·
+		<kbd>j</kbd>/<kbd>k</kbd> move · <kbd>Enter</kbd> open · <kbd>x</kbd> select (Shift-click a box: a range) · <kbd>e</kbd>/<kbd>i</kbd> eligible/ineligible ·
 		<kbd>s</kbd> score fit · <kbd>t</kbd> tailor · <kbd>h</kbd> hide · <kbd>/</kbd> search
 	</p>
 </div>
 
 <div class="mb-3 flex flex-wrap gap-1.5">
 	{#each views as v (v.label)}
-		<button class="btn btn-sm {viewActive(v.params) ? 'btn-primary' : ''}" onclick={() => setParams({ ...v.params, q: search.trim() || null, sort: page.url.searchParams.get('sort') }, true)} title={v.label === 'Cut' ? 'Fit-scored below the cut-off (Settings › Runs and limits); never tailored' : undefined}>{v.label}{v.label === 'Cut' && data.cutCount ? ` (${data.cutCount})` : ''}</button>
+		<button class="btn btn-sm {viewActive(v.params) ? 'btn-primary' : ''}" onclick={() => setParams({ ...v.params, q: search.trim() || null, sort: page.url.searchParams.get('sort'), dir: page.url.searchParams.get('dir'), source: page.url.searchParams.get('source'), min_fit: page.url.searchParams.get('min_fit') }, true)} title={v.label === 'Cut' ? 'Fit-scored below the cut-off (Settings › Runs and limits); never tailored' : undefined}>{v.label}{v.label === 'Cut' && data.cutCount ? ` (${data.cutCount})` : ''}</button>
 	{/each}
 </div>
 {#if page.url.searchParams.get('cut')}
@@ -136,12 +175,25 @@
 		<option value="">Any fit</option>
 		{#each ['0.5', '0.6', '0.7', '0.8'] as f (f)}<option value={f}>Fit ≥ {f}</option>{/each}
 	</select>
-	<select class="input w-auto" aria-label="Sort" value={page.url.searchParams.get('sort') ?? 'fit'} onchange={(e) => setParams({ sort: e.currentTarget.value })}>
+	<select class="input w-auto lg:hidden" aria-label="Sort" value={sortKey} onchange={(e) => setParams({ sort: e.currentTarget.value, dir: null })}>
 		<option value="fit">Best fit</option>
 		<option value="posted">Newest</option>
 		<option value="company">Company</option>
+		<option value="title">Role</option>
+		<option value="verdict">Verdict</option>
+		<option value="location">Location</option>
+		<option value="progress">Progress</option>
 	</select>
 </div>
+{#if filters.length}
+	<div class="mb-3 flex flex-wrap items-center gap-1.5 text-sm" aria-label="Active filters">
+		<span class="text-muted">{data.total} job{data.total === 1 ? '' : 's'}:</span>
+		{#each filters as f (f.label)}
+			<button class="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 hover:bg-sunken" onclick={() => clearFilter(f.clear)} aria-label="Remove filter {f.label}">{f.label} <span class="text-muted" aria-hidden="true">✕</span></button>
+		{/each}
+		<button class="text-accent hover:underline" onclick={() => { search = ''; setParams({ sort: page.url.searchParams.get('sort'), dir: page.url.searchParams.get('dir') }, true); }}>Clear all</button>
+	</div>
+{/if}
 
 {#if selected.size}
 	<div class="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-surface p-2 shadow-sm">
@@ -162,13 +214,27 @@
 		<thead class="border-b border-line text-left text-xs text-muted">
 			<tr>
 				<th class="w-8 p-2"><input type="checkbox" aria-label="Select all" checked={allSelected} onchange={() => (selected = allSelected ? new Set() : new Set(data.rows.map((r) => r.id)))} /></th>
-				<th class="p-2 font-medium">Fit</th>
-				<th class="p-2 font-medium">Verdict</th>
-				<th class="p-2 font-medium">Role</th>
-				<th class="hidden p-2 font-medium md:table-cell">Location</th>
-				<th class="hidden p-2 font-medium lg:table-cell">Source</th>
-				<th class="hidden p-2 font-medium lg:table-cell">Posted</th>
-				<th class="p-2 font-medium">Progress</th>
+				{#snippet heading(key: string, label: string, cls = '')}
+					<th class="p-2 font-medium {cls}" aria-sort={ariaSort(key)}>
+						<button class="inline-flex items-center gap-1 hover:text-fg {key === sortKey ? 'text-fg' : ''}" onclick={() => sortBy(key)} title="Sort by {label.toLowerCase()}{key === sortKey ? ` (${sortDir === 'asc' ? 'ascending' : 'descending'}; click to reverse)` : ''}">
+							{label}{#if key === sortKey}<span class="text-[10px]" aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}
+						</button>
+					</th>
+				{/snippet}
+				{@render heading('fit', 'Fit')}
+				{@render heading('verdict', 'Verdict')}
+				<th class="p-2 font-medium" aria-sort={sortKey === 'title' || sortKey === 'company' ? ariaSort(sortKey) : 'none'}>
+					<span class="inline-flex items-center gap-1">
+						{#each [['title', 'Role'], ['company', 'Company']] as [key, label], n (key)}
+							{#if n}<span class="text-muted">·</span>{/if}
+							<button class="inline-flex items-center gap-1 hover:text-fg {key === sortKey ? 'text-fg' : ''}" onclick={() => sortBy(key)} title="Sort by {label.toLowerCase()}">{label}{#if key === sortKey}<span class="text-[10px]" aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</button>
+						{/each}
+					</span>
+				</th>
+				{@render heading('location', 'Location', 'hidden md:table-cell')}
+				{@render heading('source', 'Source', 'hidden lg:table-cell')}
+				{@render heading('posted', 'Posted', 'hidden lg:table-cell')}
+				{@render heading('progress', 'Progress')}
 			</tr>
 		</thead>
 		<tbody>
@@ -178,7 +244,7 @@
 					class="border-b border-line last:border-0 {i === cursor ? 'bg-sunken' : 'hover:bg-sunken/60'} {selected.has(r.id) ? 'outline-1 -outline-offset-1 outline-accent' : ''}"
 					onclick={() => (cursor = i)}
 				>
-					<td class="p-2"><input type="checkbox" aria-label="Select {r.title}" checked={selected.has(r.id)} onchange={() => toggle(r.id)} /></td>
+					<td class="p-2"><input type="checkbox" aria-label="Select {r.title}" checked={selected.has(r.id)} onclick={(e) => check(e, i, r.id)} /></td>
 					<td class="p-2"><FitBar value={r.fit} /></td>
 					<td class="p-2"><VerdictPill verdict={r.verdict} overridden={r.overridden} /></td>
 					<td class="max-w-[28rem] p-2">

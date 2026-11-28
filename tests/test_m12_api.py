@@ -278,3 +278,26 @@ def test_normalize_places_the_corners():
     assert len(out["sections"][1]["items"]) == 1 and out["contact"] == "a@b.c" and len(out["skills"]) == 1
     assert out["sections"][0]["renamed"] is False and out["sections"][1]["renamed"] is True
     assert normalize(EditableLayout(**editable(out))) == out  # round trip
+
+
+def test_jobs_sort_by_any_column_both_ways_with_blanks_last(client):
+    from autotailor.api_more import sort_rows
+
+    def row(i, fit=None, location=None, posted=None, app=None, tailored=False, verdict="eligible"):
+        return {"id": i, "company": f"C{i}", "title": f"T{i}", "fit": fit, "prescore": None, "location": location,
+                "posted_at": posted, "application": app, "tailored": tailored, "status": "resolved",
+                "verdict": verdict, "source": "lever"}  # fmt: skip
+
+    rows = [row("a", 0.5, "Denver", "2026-11-01"), row("b", None, None, None, tailored=True, verdict="unclear"),
+            row("c", 0.9, "Austin", "2026-11-20", app="interview")]  # fmt: skip
+    ids = lambda rs: [r["id"] for r in rs]  # noqa: E731
+    assert ids(sort_rows(rows, "fit")) == ["c", "a", "b"]  # best first, unscored last
+    assert ids(sort_rows(rows, "fit", "asc")) == ["a", "c", "b"]  # unscored still last
+    assert ids(sort_rows(rows, "location")) == ["c", "a", "b"] and ids(sort_rows(rows, "location", "desc")) == ["a", "c", "b"]
+    assert ids(sort_rows(rows, "posted")) == ["c", "a", "b"]
+    assert ids(sort_rows(rows, "progress")) == ["c", "b", "a"]  # interview, resume ready, new
+    assert ids(sort_rows(rows, "verdict")) == ["c", "a", "b"]  # eligible (best fit first), then unclear
+    assert ids(sort_rows(rows, "nonsense")) == ids(sort_rows(rows, "fit"))
+
+    r = client.get("/api/jobs?sort=company&dir=desc")
+    assert [j["company"] for j in r.json()] == sorted([j["company"] for j in r.json()], reverse=True)

@@ -75,6 +75,43 @@ class YamlIn(BaseModel):
     confirm_delete_used: bool = False
 
 
+# --- sorting the jobs table -------------------------------------------------------------------------
+# Every column sorts. Each key gives a row's value, or None when it has none (shown last whatever
+# the direction), and the direction a first click uses.
+_VERDICT_ORDER = {"eligible": 0, "unclear": 1, "ineligible": 2, "not_screened": 3}
+_PROGRESS = ("new", "needs_link", "tailored", "applied", "heard_back", "interview", "offer", "rejected", "withdrawn")
+
+
+def _progress(r: dict) -> int:
+    if r["application"]:
+        return _PROGRESS.index(r["application"]) if r["application"] in _PROGRESS else 3
+    return 2 if r["tailored"] else 1 if r["status"] == "needs_link" else 0
+
+
+SORTS: dict[str, tuple[Any, str]] = {
+    "fit": (lambda r: (r["fit"], r["prescore"] or 0) if r["fit"] is not None else None, "desc"),
+    "verdict": (lambda r: _VERDICT_ORDER.get(r["verdict"], 9), "asc"),
+    "title": (lambda r: r["title"].lower(), "asc"),
+    "company": (lambda r: r["company"].lower(), "asc"),
+    "location": (lambda r: r["location"].lower() if r["location"] else None, "asc"),
+    "source": (lambda r: r["source"], "asc"),
+    "posted": (lambda r: r["posted_at"] or None, "desc"),
+    "progress": (_progress, "desc"),
+}
+
+
+def sort_rows(rows: list[dict], sort: str, direction: str | None = None) -> list[dict]:
+    """Rows by one column (`direction` asc/desc, or the column's usual one); rows without a value
+    last; ties broken by fit, then company."""
+    key, default = SORTS.get(sort, SORTS["fit"])
+    desc = (direction or default) == "desc"
+    tiebreak = sorted(rows, key=lambda r: r["company"].lower())
+    tiebreak.sort(key=lambda r: (r["fit"] is not None, r["fit"] or 0), reverse=True)
+    present = [r for r in tiebreak if key(r) is not None]
+    missing = [r for r in tiebreak if key(r) is None]
+    return sorted(present, key=key, reverse=desc) + missing
+
+
 def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: ANN001, C901
     # --- live events ----------------------------------------------------------------------
 
@@ -151,7 +188,8 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
         response: Response, conn=Depends(_conn),  # noqa: ANN001
         verdict: str | None = None, q: str | None = None, source: str | None = None,
         min_fit: float | None = None, has_resume: bool | None = None, hidden: bool = False,
-        applied: bool | None = None, sort: str = "fit", offset: int = 0, limit: int = 100, cut: bool = False,
+        applied: bool | None = None, sort: str = "fit", dir: str | None = None, offset: int = 0, limit: int = 100,
+        cut: bool = False,
         settings: Settings = Depends(_settings),
     ) -> list[dict]:  # fmt: skip
         """The jobs table: one row per posting with its verdict, fit and progress. Total in X-Total-Count.
@@ -194,12 +232,7 @@ def register(app: FastAPI, _conn, _settings, _paths, _need) -> None:  # noqa: AN
             if applied is not None and (row["application"] is not None) != applied:
                 continue
             rows.append(row)
-        keys = {
-            "fit": lambda r: (r["fit"] is not None, r["fit"] or 0, r["prescore"] or 0),
-            "posted": lambda r: r["posted_at"] or "",
-            "company": lambda r: r["company"].lower(),
-        }
-        rows.sort(key=keys.get(sort, keys["fit"]), reverse=sort != "company")
+        rows = sort_rows(rows, sort, dir)
         response.headers["X-Total-Count"] = str(len(rows))
         deleted = conn.execute("SELECT COUNT(*) FROM cut_postings").fetchone()[0]
         response.headers["X-Cut-Count"] = str(cut_count + deleted)

@@ -1783,7 +1783,8 @@ def ui(
         "api": subprocess.Popen(
             [sys.executable, "-m", "autotailor.cli", "api", "--port", str(api_port)],
             # Unbuffered, or a piped Python child holds its output (and its last words) back.
-            env={**env, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}, **piped,
+            # PYTHONFAULTHANDLER: if the API ever crashes in native code, its stack goes to ui.log.
+            env={**env, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONFAULTHANDLER": "1"}, **piped,
         ),
         "web": subprocess.Popen(
             [node, str(build)],

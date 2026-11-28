@@ -25,8 +25,8 @@ test('signing in: nothing opens without a session, and the link works only once'
 
 test('jobs: list, keyboard, open a job', async ({ page }) => {
 	await open(page, '/jobs');
-	await expect(page.getByRole('heading', { name: /Jobs/ })).toContainText('2');
-	await expect(page.locator('tbody tr')).toHaveCount(2);
+	await expect(page.getByRole('heading', { name: /Jobs/ })).toContainText('3');
+	await expect(page.locator('tbody tr')).toHaveCount(3);
 	await page.keyboard.press('j');
 	await page.keyboard.press('Enter');
 	await expect(page).toHaveURL(/\/jobs\/lever%3Ae2e-b/);
@@ -169,4 +169,51 @@ test('ATS keywords: pick missing ones (or type one) to add with the AI', async (
 	await page.keyboard.press('Enter');
 	await expect(add).toHaveText('Add 2 with AI');
 	await expect(add).toBeEnabled();
+});
+
+test('runway: a role waiting for a link renders, and its link can be typed', async ({ page }) => {
+	const errors: string[] = [];
+	page.on('pageerror', (e) => errors.push(e.message));
+	await open(page, '/runway');
+	await expect(page.getByRole('heading', { name: 'Runway' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /Waiting for a link/ })).toBeVisible();
+	const url = page.getByLabel('Employer URL');
+	await url.fill('https://boards.greenhouse.io/globex/jobs/1');
+	await expect(page.getByRole('button', { name: 'Use link' })).toBeEnabled();
+	expect(errors).toEqual([]);
+});
+
+test('a job can be screened from its own page', async ({ page }) => {
+	await open(page, '/jobs/lever%3Ae2e-a');
+	const screen = page.getByRole('button', { name: 'Screen again' });
+	await expect(screen).toBeEnabled();
+	await screen.click();
+	await expect(page.getByText('Screening started')).toBeVisible();
+	await open(page, '/terminal');
+	await expect(page.getByRole('log', { name: 'Command output' })).toContainText('screen lever:e2e-a --reextract', { timeout: 30_000 });
+});
+
+test('jobs: sort by clicking a heading, see and clear filters, Shift-click a range', async ({ page }) => {
+	await open(page, '/jobs');
+	const companies = async () => (await page.locator('tbody tr td:nth-child(4) div').allTextContents()).map((s) => s.trim());
+	await page.getByRole('button', { name: 'Company', exact: true }).click();
+	await expect(page).toHaveURL(/sort=company/);
+	await expect(page.locator('th[aria-sort="ascending"]')).toContainText('Company');
+	const asc = await companies();
+	expect(asc).toEqual([...asc].sort((a, b) => a.localeCompare(b)));
+	await page.getByRole('button', { name: 'Company', exact: true }).click();
+	await expect(page).toHaveURL(/dir=desc/);
+	await expect(page.locator('th[aria-sort="descending"]')).toContainText('Company');
+	expect(await companies()).toEqual([...asc].reverse());
+
+	await page.getByLabel('Search jobs').fill('intern');
+	await expect(page.getByRole('button', { name: 'Remove filter “intern”' })).toBeVisible();
+	await page.getByRole('button', { name: 'Clear all' }).click();
+	await expect(page.getByLabel('Active filters')).toHaveCount(0);
+	await expect(page).toHaveURL(/sort=company/); // the sort stays
+
+	const boxes = page.locator('tbody input[type=checkbox]');
+	await boxes.nth(0).click();
+	await boxes.nth(2).click({ modifiers: ['Shift'] });
+	await expect(page.getByText('3 selected')).toBeVisible();
 });

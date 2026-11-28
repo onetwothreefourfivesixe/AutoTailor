@@ -70,11 +70,14 @@
 		clearTimeout(timer);
 		timer = setTimeout(() => render(body), 900);
 	});
+	let inflight: AbortController | null = null;
 	async function render(body: string) {
 		const mine = ++seq;
+		inflight?.abort(); // a newer edit makes the previous preview pointless: don't wait for it
+		const ctrl = (inflight = new AbortController());
 		previewing = true;
 		try {
-			const res = await fetch(`/api/jobs/${enc(postingId)}/resume/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+			const res = await fetch(`/api/jobs/${enc(postingId)}/resume/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: ctrl.signal });
 			if (mine !== seq) return;
 			if (!res.ok) {
 				previewError = (await res.json().catch(() => ({}))).detail ?? 'The preview failed.';
@@ -85,6 +88,8 @@
 			preview = url;
 			previewPages = Number(res.headers.get('x-pages'));
 			previewError = null;
+		} catch (e) {
+			if ((e as Error).name !== 'AbortError' && mine === seq) previewError = "The preview couldn't be made; your edits are still here.";
 		} finally {
 			if (mine === seq) previewing = false;
 		}

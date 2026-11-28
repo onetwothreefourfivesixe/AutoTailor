@@ -225,7 +225,7 @@ def save_edit(folder: Path, pdf: Path, docx: Path, data: Path, resume: TailoredR
 EDITED_LAYOUT = "layout.edited.json"  # the final editor's version of the page, when there is one
 
 
-def layout_warnings(layout: dict, cv: MasterCV) -> list[str]:
+def layout_warnings(layout: dict, cv: MasterCV, allowed: list[str] = ()) -> list[str]:
     """Notes on hand-written text: numbers, names or tools the CV doesn't have anywhere. Not
     errors (the user knows what's true), but worth a look, and worth adding to the CV if right."""
     from autotailor.resume.verify import _numbers, _terms, _vocabulary
@@ -238,6 +238,7 @@ def layout_warnings(layout: dict, cv: MasterCV) -> list[str]:
     every += [s for g in cv.skills for s in [g.name, *g.items]]
     c = cv.contact
     every += [c.name, c.email or "", c.phone or "", c.location or "", *c.links]
+    every += list(allowed)  # the posting's keywords: chosen by the user, so no note for them
     source = "\n".join(every)
     vocab, numbers = _vocabulary(source), _numbers(source)
     out = []
@@ -268,7 +269,7 @@ def save_layout_edit(folder: Path, pdf: Path, docx: Path, layout: dict, cv: Mast
     fit.update({"edited": True, "pages": pdf_page_count(pdf_bytes), "keyword_score": coverage.score,
                 "keywords_matched": coverage.matched, "keywords_missing": coverage.missing})  # fmt: skip
     fit_file.write_text(json.dumps(fit, indent=1), encoding="utf-8")
-    return Edited(fit["pages"], layout_warnings(layout, cv), coverage.score)
+    return Edited(fit["pages"], layout_warnings(layout, cv, keywords), coverage.score)
 
 
 def current_layout(folder: Path, resume: TailoredResume, cv: MasterCV, style: Style) -> dict:

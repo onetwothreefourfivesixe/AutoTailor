@@ -123,6 +123,9 @@
 		<button class="btn btn-primary" disabled={!p.description} onclick={() => act(() => send('POST', '/jobs/bulk', { ids: [p.id], action: 'tailor' }), 'Tailoring started. Follow it in the task tray.')}>
 			{job.has_resume ? 'Tailor again' : 'Tailor resume'}
 		</button>
+		<button class="btn" disabled={!p.description} title={p.description ? "Check eligibility: read the posting's requirements again and judge them against your profile" : 'No posting text to screen yet'} onclick={() => act(() => send('POST', '/jobs/bulk', { ids: [p.id], action: 'rescreen' }), 'Screening started. Follow it in the task tray.')}>
+			{m ? 'Screen again' : 'Screen'}
+		</button>
 		<button class="btn" disabled={!p.description || !m} title={m ? "Fit-score this job with the score step's model" : 'Screen it first'} onclick={() => act(() => send('POST', '/jobs/bulk', { ids: [p.id], action: 'score' }), 'Fit scoring started. Follow it in the task tray.')}>
 			{m?.fit_score != null ? 'Score fit again' : 'Score fit'}
 		</button>
@@ -186,7 +189,7 @@
 					<p class="mb-2"><VerdictPill verdict={m.verdict} overridden={!!m.original_verdict} />
 						{#if m.original_verdict}<span class="ml-2 text-sm text-muted">The rules said {m.original_verdict}.</span>{/if}</p>
 					<ul class="list-disc space-y-1 pl-5 text-sm">{#each m.verdict_reasons as r (r)}<li>{r}</li>{/each}</ul>
-				{:else}<p class="text-sm text-muted">Not screened yet.</p>{/if}
+				{:else}<p class="text-sm text-muted">Not screened yet. Use “Screen” above.</p>{/if}
 				{#if p.requirements}
 					{@const r = p.requirements}
 					<h2 class="h2 mt-5 mb-2">Requirements read from the posting</h2>

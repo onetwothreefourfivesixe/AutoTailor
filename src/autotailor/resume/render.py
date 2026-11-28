@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import json
 import re
 from dataclasses import dataclass
@@ -142,6 +144,12 @@ def render_resume(layout: dict[str, Any], template: str, templates_dir: Path, to
         return Rendered(render_pdf(layout), "typst", f"{e} Used the Typst template instead.")
 
 
+# PDFium (pypdfium2) is not thread-safe: two renders at once crash the process (a segfault,
+# seen when the editor's live previews overlapped). The API serves requests on many threads,
+# so every use of PDFium goes through this lock.
+_PDFIUM = threading.Lock()
+
+
 def pdf_to_png(pdf: bytes, scale: float = 1.6, all_pages: bool = True, gap: int = 16) -> bytes:
     """A PDF as one PNG (pypdfium2), for previews of any template: every page, stacked
     top to bottom with a gap between them (or only the first page)."""
@@ -150,12 +158,13 @@ def pdf_to_png(pdf: bytes, scale: float = 1.6, all_pages: bool = True, gap: int 
     import pypdfium2 as pdfium
     from PIL import Image
 
-    doc = pdfium.PdfDocument(pdf)
-    try:
-        count = len(doc) if all_pages else 1
-        images = [doc[i].render(scale=scale).to_pil() for i in range(count)]
-    finally:
-        doc.close()
+    with _PDFIUM:
+        doc = pdfium.PdfDocument(pdf)
+        try:
+            count = len(doc) if all_pages else 1
+            images = [doc[i].render(scale=scale).to_pil() for i in range(count)]
+        finally:
+            doc.close()
     if len(images) == 1:
         sheet = images[0]
     else:

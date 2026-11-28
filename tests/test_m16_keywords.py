@@ -73,7 +73,11 @@ def test_check_bullet():
     assert check_bullet(before, "Built a Python ETL pipeline that links records across 4 datasets", "ETL") is None
     assert "didn't include" in check_bullet(before, before, "ETL")
     assert "numbers" in check_bullet(before, "Built a Python ETL pipeline that links records across 9 datasets", "ETL")
-    assert "too much" in check_bullet(before, "Wrote ETL jobs", "ETL")
+    assert "added words" in check_bullet(before, "Wrote ETL jobs", "ETL")  # a rewrite, not a keyword added
+    # Found live: a small model appended a claim along with the keyword.
+    ocr = "Built an OCR pipeline with OpenCV and a CRNN model to read price labels from shelf photos"
+    assert "vision" in check_bullet(ocr, ocr + " for robotics vision integration", "Robotics")
+    assert check_bullet(ocr, ocr.replace("OCR pipeline", "OCR pipeline using Robotics"), "Robotics") is None
 
 
 def test_api_and_cli(tmp_path, monkeypatch):
@@ -145,3 +149,16 @@ def test_a_plural_keyword_after_a_takes_the_singular():
     assert fix_article("Architected a multi-agent RAG pipelines on Neo4j", "RAG pipelines") == "Architected a multi-agent RAG pipeline on Neo4j"
     assert fix_article("Built data pipelines for 4 teams", "data pipelines") == "Built data pipelines for 4 teams"
     assert fix_article("Ran a pass", "pass") == "Ran a pass"
+
+
+def test_saving_gives_no_note_for_the_chosen_keywords():
+    import yaml
+    from test_m4_resume import CV_TEXT
+
+    from autotailor.cv import MasterCV
+    from autotailor.resume.output import layout_warnings
+
+    cv = MasterCV.model_validate(yaml.safe_load(CV_TEXT))
+    page = {"sections": [{"items": [{"bullets": ["Built Kubernetes deployments for 9 teams"], "title": "", "organization": "", "stack": ""}]}]}
+    notes = layout_warnings(page, cv, allowed=["Kubernetes"])
+    assert len(notes) == 1 and "9" in notes[0] and "kubernetes" not in notes[0].lower().split(":")[-1]

@@ -63,6 +63,12 @@ def main() -> None:
                       CV, style=Style("typst", fill_page=False))  # fmt: skip
     for kind, path in (("resume_pdf", w.pdf), ("resume_docx", w.docx), ("resume_data", w.data)):
         db.add_artifact(conn, run_id, "lever:e2e-a", kind, str(path.relative_to(outputs)), "test")
+    # A Runway role waiting for the employer's link (the Runway page's "Waiting for a link" list).
+    from autotailor.models import JobPosting, PostingStatus, Source
+
+    db.upsert_posting(conn, JobPosting(id="runway:e2e-r1", source=Source.RUNWAY, source_ref="e2e-r1", company="Globex",
+                                       title="Policy Analyst Intern", status=PostingStatus.NEEDS_LINK))  # fmt: skip
+    db.add_runway_role(conn, "e2e-r1", "runway:e2e-r1", "Globex", "Policy Analyst Intern", "Remote", None, 0.8, None)
     conn.commit()
     conn.close()
 

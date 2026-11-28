@@ -232,3 +232,17 @@ def test_usual_resume_hidden_entries_stack_and_order():
     assert [p["title"] for p in in_cv_order] == [shelf["title"], budget["title"]]
     assert not any(s["key"] == "activities" for s in layout["sections"])
     assert sum(len(g["items"].split(", ")) for g in layout["skills"]) == sum(len(g.items) for g in cv.skills)
+
+
+def test_previews_can_render_from_many_threads_at_once():
+    """PDFium isn't thread-safe; without the lock in pdf_to_png this crashed the API (segfault)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import typst
+
+    from autotailor.resume.render import pdf_to_png
+
+    pdf = typst.compile(b"#set page(width: 10cm, height: 8cm)\nfirst\n#pagebreak()\nsecond")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pngs = list(pool.map(lambda _: pdf_to_png(pdf, scale=1), range(32)))
+    assert len({len(p) for p in pngs}) == 1 and pngs[0].startswith(b"\x89PNG")

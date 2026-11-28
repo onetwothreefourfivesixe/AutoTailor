@@ -7,7 +7,11 @@
 	let { data } = $props();
 	const waiting = $derived(data.roles.filter((r) => r.status === 'open' && r.posting_id && data.needsLink.includes(r.posting_id)));
 	let answers = $state<Record<string, { url: string; text: string }>>({});
-	const a = (id: string) => (answers[id] ??= { url: '', text: '' });
+	// Reading never creates an entry: the page reads these while it renders, and changing state
+	// during rendering is an error in Svelte 5 (state_unsafe_mutation). Typing creates it.
+	const EMPTY = { url: '', text: '' };
+	const a = (id: string) => answers[id] ?? EMPTY;
+	const setA = (id: string, key: 'url' | 'text', value: string) => (answers[id] = { ...a(id), [key]: value });
 
 	async function start(cmd: string, label: string) {
 		try {
@@ -54,13 +58,13 @@
 				</div>
 				<p class="mb-2 text-xs text-muted">Open it in your browser, follow it to the employer's posting, and paste that link (or the posting text).</p>
 				<div class="flex flex-wrap gap-2">
-					<input class="input min-w-0 flex-1" placeholder="Employer's posting URL" value={a(pid).url} oninput={(e) => (a(pid).url = e.currentTarget.value)} aria-label="Employer URL" />
+					<input class="input min-w-0 flex-1" placeholder="Employer's posting URL" value={a(pid).url} oninput={(e) => setA(pid, 'url', e.currentTarget.value)} aria-label="Employer URL" />
 					<button class="btn btn-primary" disabled={!a(pid).url.trim()} onclick={() => answer(pid, { url: a(pid).url.trim() })}>Use link</button>
 					<button class="btn" onclick={() => answer(pid, { skip: true })}>Skip role</button>
 				</div>
 				<details class="mt-2">
 					<summary class="cursor-pointer text-xs text-muted">…or paste the posting text</summary>
-					<textarea class="input mt-2 h-28" value={a(pid).text} oninput={(e) => (a(pid).text = e.currentTarget.value)} aria-label="Posting text"></textarea>
+					<textarea class="input mt-2 h-28" value={a(pid).text} oninput={(e) => setA(pid, 'text', e.currentTarget.value)} aria-label="Posting text"></textarea>
 					<button class="btn btn-sm mt-1" disabled={!a(pid).text.trim()} onclick={() => answer(pid, { text: a(pid).text })}>Use text</button>
 				</details>
 			</section>
